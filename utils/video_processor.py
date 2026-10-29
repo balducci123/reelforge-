@@ -6,8 +6,10 @@ import re
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from .smart_crop import SmartCropper
+from .smart_crop import ViralSmartCropper
 from .transcriber import Transcriber
+from .audio_analyzer import AudioAnalyzer
+from .clip_scorer import ClipScorer
 
 
 class VideoProcessor:
@@ -16,9 +18,14 @@ class VideoProcessor:
         self.output_dir = Path(output_dir)
         self.upload_dir.mkdir(exist_ok=True)
         self.output_dir.mkdir(exist_ok=True)
-        self.smart_cropper = SmartCropper()
-        self.transcriber = Transcriber()
+        self.smart_cropper = ViralSmartCropper()
+        self.transcriber = Transcriber(model_size="base", device="cpu", compute_type="int8")
+        self.audio_analyzer = AudioAnalyzer()
+        self.clip_scorer = ClipScorer()
 
+    # ------------------------------------------------------------------ #
+    # YouTube ID & folder management
+    # ------------------------------------------------------------------ #
     def get_youtube_id(self, youtube_url):
         patterns = [
             r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
@@ -37,6 +44,9 @@ class VideoProcessor:
         folder.mkdir(parents=True, exist_ok=True)
         return folder, video_id
 
+    # ------------------------------------------------------------------ #
+    # Duration
+    # ------------------------------------------------------------------ #
     def get_video_duration(self, video_path):
         cmd = [
             'ffprobe', '-v', 'quiet', '-print_format', 'json',
@@ -51,6 +61,28 @@ class VideoProcessor:
         except Exception as e:
             raise Exception(f"Failed to get video duration: {str(e)}")
 
+    def is_vertical(self, video_path):
+        """Ritorna True se il video è già verticale (altezza > larghezza)."""
+        cmd = [
+            'ffprobe', '-v', 'quiet', '-print_format', 'json',
+            '-show_streams', str(video_path)
+        ]
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, timeout=15)
+            data = json.loads(result.stdout)
+            for stream in data.get('streams', []):
+                if stream.get('codec_type') == 'video':
+                    w = stream.get('width', 0)
+                    h = stream.get('height', 0)
+                    if w and h and h > w:
+                        return True
+            return False
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------ #
+    # Download (yt-dlp con EJS fallback + file locale)
+    # ------------------------------------------------------------------ #
     def download_video(self, youtube_url, proxy_url=None, local_video_path=None):
         video_id = str(uuid.uuid4())
         output_template = self.upload_dir / f"{video_id}.%(ext)s"
@@ -89,8 +121,8 @@ class VideoProcessor:
             raise Exception(
                 "Failed to download video. "
                 f"Last error: {last_error}. "
-                "Suggerimento: installa EJS con `pip install ejs ytdlp-ejs` e Node.js con `winget install OpenJS.NodeJS.LTS`, "
-                "oppure usa l'upload locale."
+                "Suggerimento: installa EJS con `pip install ejs ytdlp-ejs` e Node.js, "
+                "oppure carica un file video locale."
             )
 
         for file in self.upload_dir.glob(f"{video_id}.*"):
@@ -105,6 +137,9 @@ class VideoProcessor:
 
         raise Exception("Downloaded file not found")
 
+    # ------------------------------------------------------------------ #
+    # Cache
+    # ------------------------------------------------------------------ #
     def check_cached_clips(self, video_folder, num_clips, clip_duration):
         if not video_folder.exists():
             return []
@@ -117,12 +152,83 @@ class VideoProcessor:
             clips.append(matches[0])
         return clips
 
-    def split_by_duration(self, input_path, clip_duration, num_clips=None, top_text="", bottom_text="", max_workers=1, output_folder=None, mode='bars', use_whisper=False, progress_callback=None):
+    # ------------------------------------------------------------------ #
+    # ASS Subtitle generator (karaoke parola per parola, safe zone TikTok)
+    # ------------------------------------------------------------------ #
+    def generate_ass_subtitles(self, words, output_path, style_name='Default'):
+        """
+        Genera file .ass con sottotitoli karaoke ottimizzati per TikTok/Reels:
+        - Parola attiva: giallo #FFE135, font 62pt, contorno nero spesso
+        - Altre parole: bianco, font 48pt
+        - Posizione: centro-basso (safe zone, sopra la zona like/commenti)
+        - Ombra per leggibilità
+        """
+        if not words:
+            output_path.write_text(
+                '[Script Info]\nTitle: ReelForge\nScriptType: v4.00+\n'
+                '[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, '
+                'OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, '
+                'Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, '
+                'MarginV, Encoding\n'
+                'Style: Default,Arial,52,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,'
+                '100,100,0,0,1,3,0,2,10,10,30,1\n'
+                '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, '
+                'Effect, Text\n',
+                encoding='utf-8'
+            )
+            return output_path
+
+        max_time = words[-1]['end'] if words else 0
+        events = []
+
+        for i, w in enumerate(words):
+            start = self._format_ass_time(w['start'])
+            end = self._format_ass_time(w['end'])
+            word_text = w['word'].replace('{', '\\{').replace('}', '\\}')
+            # Parola attiva: giallo, grasso, font più grande
+            events.append(
+                f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,"
+                f"{{\\c&H00E1FF&\\b1\\fs66\\3c&H000000&\\4c&H000000&\\3a&H60&\\4a&H60&}}"
+                f"{word_text}"
+            )
+
+        ass_content = (
+            '[Script Info]\nTitle: ReelForge Karaoke\nScriptType: v4.00+\n'
+            '[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, '
+            'OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, '
+            'Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, '
+            'MarginV, Encoding\n'
+            'Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,'
+            '100,100,0,0,1,2,0,2,10,10,40,1\n'
+            '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, '
+            'Effect, Text\n'
+            + '\n'.join(events)
+            + '\n'
+        )
+        output_path.write_text(ass_content, encoding='utf-8')
+        print(f'[Subtitles] Generato ASS con {len(words)} eventi karaoke')
+        return output_path
+
+    def _format_ass_time(self, seconds):
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        s = int(seconds % 60)
+        cs = int((seconds - int(seconds)) * 100)
+        return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
+    # ------------------------------------------------------------------ #
+    # Smart split con Whisper + Audio Analyzer + Clip Scorer
+    # ------------------------------------------------------------------ #
+    def split_by_duration(self, input_path, clip_duration, num_clips=None, top_text="", bottom_text="",
+                          max_workers=1, output_folder=None, mode='bars', use_whisper=False,
+                          crop_strategy='smart_crop', use_karaoke=False,
+                          progress_callback=None, auto_select=True, min_score=60):
         clip_duration = int(round(float(clip_duration)))
         if clip_duration < 30 or clip_duration > 60:
             raise Exception("Clip duration must be between 30 and 60 seconds")
 
         duration = self.get_video_duration(input_path)
+        is_vid_vertical = self.is_vertical(input_path)
 
         if num_clips is not None:
             num_clips = int(num_clips)
@@ -130,41 +236,56 @@ class VideoProcessor:
                 num_clips = 1
             if num_clips > 10:
                 num_clips = 10
-            segment_duration = clip_duration
-            max_possible = int(duration // segment_duration)
-            if max_possible > 0 and num_clips > max_possible:
-                num_clips = max_possible
-        else:
-            segment_duration = clip_duration
-            num_clips = int(duration // segment_duration)
-            if num_clips < 1:
-                num_clips = 1
 
-        print(f'[VideoProcessor] Pianificati {num_clips} clip da {segment_duration}s ciascuna su video di {duration:.2f}s')
+        print(f'[VideoProcessor] Video verticale: {is_vid_vertical} | Durata: {duration:.2f}s | '
+              f'Richeste: {num_clips} clip da {clip_duration}s')
 
         target_folder = Path(output_folder) if output_folder else self.output_dir
         target_folder.mkdir(parents=True, exist_ok=True)
 
-        results = []
-        tasks = []
+        # --- Fase 1: Analisi audio per punti di taglio ottimali ---
+        audio_analysis = self.audio_analyzer.analyze(input_path)
+        print(f'[AudioAnalyzer] Picchi: {audio_analysis["peak_times"][:5]}... | '
+              f'Silenzi: {len(audio_analysis["silent_ranges"])}')
 
+        # --- Fase 2: Candidati iniziali ---
         start_times = None
+        all_words = []
         if use_whisper:
             try:
                 print('[VideoProcessor] Avvio trascrizione Whisper...')
-                segments = self.transcriber.transcribe(input_path)
-                start_times = self.transcriber.get_smart_cut_points(segments, target_duration=segment_duration, num_clips=num_clips)
-                print(f'[VideoProcessor] Cut points Whisper: {start_times}')
+                words = self.transcriber.transcribe_words(input_path)
+                all_words = words
+                segments = self.transcriber.get_smart_segments(
+                    words, min_clip_duration=clip_duration, max_clip_duration=clip_duration
+                )
+                start_times = [s['start'] for s in segments]
+                print(f'[VideoProcessor] Cut points Whisper: {start_times[:num_clips]}')
             except Exception as e:
-                print(f'[VideoProcessor] Whisper fallito, uso tagli fissi: {e}')
+                print(f'[VideoProcessor] Whisper fallito, uso audio analyzer: {e}')
                 start_times = None
 
+        # Fallback: usa audio analyzer per trovare punti di taglio
+        if not start_times or len(start_times) < num_clips:
+            auto_cuts = self.audio_analyzer.find_best_cut_points(
+                audio_analysis, num_clips=num_clips,
+                min_duration=clip_duration, max_duration=clip_duration
+            )
+            start_times = [c['start'] for c in auto_cuts]
+            print(f'[AudioAnalyzer] Cut points automatici: {start_times[:num_clips]}')
+
+        # Assicura numero sufficiente di candidati
+        while len(start_times) < num_clips:
+            s = len(start_times) * clip_duration
+            if s >= duration:
+                break
+            start_times.append(round(s, 2))
+
+        # --- Fase 3: Costruisci task e valuta con Clip Scorer ---
+        raw_tasks = []
         for i in range(num_clips):
-            if start_times and i < len(start_times):
-                start_time = start_times[i]
-            else:
-                start_time = i * segment_duration
-            actual_duration = segment_duration
+            start_time = start_times[i] if i < len(start_times) else i * clip_duration
+            actual_duration = clip_duration
             if start_time + actual_duration > duration:
                 actual_duration = duration - start_time
             if actual_duration < 5:
@@ -172,28 +293,56 @@ class VideoProcessor:
 
             clip_id = str(uuid.uuid4())
             output_filename = f"clip_{i+1}_{clip_id}.mp4"
-            tasks.append({
-                'index': len(tasks) + 1,
-                'start_time': start_time,
+            clip_words = [w for w in all_words if start_time <= w['start'] and w['end'] <= start_time + actual_duration]
+
+            # Testo del clip per scoring hook
+            clip_text = ' '.join(w['word'] for w in clip_words)
+
+            raw_tasks.append({
+                'index': len(raw_tasks) + 1,
+                'start_time': round(start_time, 2),
                 'duration': int(actual_duration),
-                'output_filename': output_filename
+                'output_filename': output_filename,
+                'words': clip_words,
+                'text': clip_text,
+                'has_hook': any(hw in clip_text.lower() for hw in self.transcriber.HOOK_WORDS)
             })
+
+        # Applica Clip Scorer se auto_select attivo
+        face_detected = True  # placeholder, verrà aggiornato dopo smart crop
+        if auto_select and raw_tasks:
+            scored = self.clip_scorer.rank_candidates(
+                raw_tasks, audio_analysis=audio_analysis,
+                face_present=face_detected, top_n=num_clips
+            )
+            # Ri-indexa dopo selezione
+            tasks = []
+            for new_idx, c in enumerate(scored, 1):
+                c['index'] = new_idx
+                tasks.append(c)
+        else:
+            tasks = raw_tasks
 
         total_tasks = len(tasks)
         print(f'[VideoProcessor] Totale task da eseguire: {total_tasks}')
 
+        # --- Fase 4: Esecuzione conversione ---
+        results = []
         for idx, task in enumerate(tasks):
             if progress_callback:
                 try:
                     pct = int((idx / max(1, total_tasks)) * 100)
-                    progress_callback(pct, f'Clip {task["index"]}/{total_tasks}: inizio conversione')
+                    progress_callback(pct, f'Clip {task["index"]}/{total_tasks}: conversione')
                 except Exception:
                     pass
 
-            print(f'[VideoProcessor] Inizio clip {task["index"]}/{total_tasks}: start={task["start_time"]}s dur={task["duration"]}s mode={mode}')
+            print(f'[VideoProcessor] Clip {task["index"]}/{total_tasks}: '
+                  f'start={task["start_time"]}s dur={task["duration"]}s '
+                  f'mode={mode} crop={crop_strategy} karaoke={use_karaoke} '
+                  f'score={task.get("score", {}).get("total", "N/A")}')
 
             try:
-                output_path = self._convert_clip_segment(
+                output_path = self._convert_clip_segment_viral(
                     input_path,
                     task['start_time'],
                     task['duration'],
@@ -202,7 +351,10 @@ class VideoProcessor:
                     bottom_text,
                     target_folder,
                     mode=mode,
-                    use_smart_crop=(mode == 'smart_crop')
+                    crop_strategy=crop_strategy,
+                    use_karaoke=use_karaoke,
+                    words=task['words'],
+                    is_vertical=is_vid_vertical
                 )
                 print(f'[VideoProcessor] Clip {task["index"]} completata: {output_path.name}')
                 results.append({
@@ -210,7 +362,10 @@ class VideoProcessor:
                     'success': True,
                     'download_url': f'/download/{target_folder.name}/{output_path.name}',
                     'filename': output_path.name,
-                    'duration': task['duration']
+                    'duration': task['duration'],
+                    'cached': False,
+                    'score': task.get('score', {}),
+                    'text': task['text'][:80]
                 })
             except Exception as e:
                 print(f'[VideoProcessor] Clip {task["index"]} FALLITA: {e}')
@@ -227,46 +382,57 @@ class VideoProcessor:
                 pass
 
         results.sort(key=lambda x: x['index'])
-        print(f'[VideoProcessor] Fine: {sum(1 for r in results if r["success"])}/{len(results)} clip riuscite')
+        successful = sum(1 for r in results if r['success'])
+        print(f'[VideoProcessor] Fine: {successful}/{len(results)} clip riuscite')
         return results
 
-    def _convert_clip_segment(self, input_path, start_time, duration, output_filename, top_text, bottom_text, target_folder=None, mode='bars', use_smart_crop=False):
+    # ------------------------------------------------------------------ #
+    # Conversione singola clip con smart crop, karaoke, normalizzazione audio
+    # ------------------------------------------------------------------ #
+    def _convert_clip_segment_viral(self, input_path, start_time, duration, output_filename,
+                                    top_text, bottom_text, target_folder=None,
+                                    mode='bars', crop_strategy='smart_crop',
+                                    use_karaoke=False, words=None, is_vertical=False):
         folder = Path(target_folder) if target_folder else self.output_dir
         folder.mkdir(parents=True, exist_ok=True)
         output_path = folder / output_filename
 
-        print(f'[FFmpeg] Conversione clip: start={start_time}s dur={duration}s output={output_path.name} mode={mode}')
+        print(f'[FFmpeg] Clip: start={start_time}s dur={duration}s output={output_path.name} '
+              f'mode={mode} crop={crop_strategy} karaoke={use_karaoke} vertical_input={is_vertical}')
 
-        if use_smart_crop or mode == 'smart_crop':
+        # --- Filtro video ---
+        video_filter_parts = []
+
+        if is_vertical and mode == 'bars':
+            # Video già verticale: solo scale per uniformità, niente crop
+            video_filter_parts.append(f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black")
+        elif mode == 'smart_crop':
             try:
-                import cv2
-                use_smart_crop_mode = True
-            except ImportError:
-                print('[SmartCrop] OpenCV non installato, fallback a bande nere')
-                use_smart_crop_mode = False
-
-            if use_smart_crop_mode:
-                try:
-                    print('[SmartCrop] Campionamento frame e rilevamento soggetto...')
-                    positions, vid_duration = self.smart_cropper.sample_positions(input_path)
-                    w = int(cv2.VideoCapture(str(input_path)).get(cv2.CAP_PROP_FRAME_WIDTH))
-                    h = int(cv2.VideoCapture(str(input_path)).get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    filter_complex = self.smart_cropper.generate_filter(positions, vid_duration, w, h)
-                    if top_text and top_text.strip():
-                        escaped_top = self._escape_text(top_text.strip())
-                        filter_complex += f",drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='{escaped_top}':fontcolor=white:fontsize=56:box=1:boxcolor=black@0.4:boxborderw=10:x=(w-text_w)/2:y=h*0.08:shadowcolor=black@0.9:shadowx=2:shadowy=2"
-                    if bottom_text and bottom_text.strip():
-                        escaped_bottom = self._escape_text(bottom_text.strip())
-                        filter_complex += f",drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='{escaped_bottom}':fontcolor=white:fontsize=56:box=1:boxcolor=black@0.4:boxborderw=10:wrap_width=w*0.9:x=(w-text_w)/2:y=h*0.88:shadowcolor=black@0.9:shadowx=2:shadowy=2"
-                except Exception as e:
-                    print(f'[SmartCrop] Errore, fallback a bande nere: {e}')
-                    filter_complex = self._build_filter(top_text, bottom_text)
-            else:
-                filter_complex = self._build_filter(top_text, bottom_text)
+                positions, vid_duration, w, h = self.smart_cropper.sample_positions(input_path)
+                crop_filter = self.smart_cropper.generate_filter(
+                    positions, vid_duration, w, h, strategy=crop_strategy
+                )
+                video_filter_parts.append(crop_filter)
+            except Exception as e:
+                print(f'[SmartCrop] Errore, fallback a bande nere: {e}')
+                video_filter_parts.append(self._build_filter(top_text, bottom_text))
         else:
-            filter_complex = self._build_filter(top_text, bottom_text)
+            video_filter_parts.append(self._build_filter(top_text, bottom_text))
 
+        # --- Sottotitoli karaoke (ASS) ---
+        ass_path = None
+        if use_karaoke and words:
+            ass_filename = output_path.stem + '.ass'
+            ass_path = folder / ass_filename
+            self.generate_ass_subtitles(words, ass_path)
+            ass_path_str = str(ass_path).replace('\\', '/')
+            video_filter_parts.append(f"ass='{ass_path_str}'")
+
+        filter_complex = ','.join(video_filter_parts)
         print(f'[FFmpeg] Filter: {filter_complex}')
+
+        # --- Filtro audio: normalizzazione loudnorm per volume consistente ---
+        audio_filter = "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=summary"
 
         cmd = [
             'ffmpeg',
@@ -274,23 +440,29 @@ class VideoProcessor:
             '-i', str(input_path),
             '-t', str(float(duration)),
             '-vf', filter_complex,
+            '-af', audio_filter,
             '-threads', '2',
             '-c:v', 'libx264',
             '-preset', 'ultrafast',
-            '-crf', '23',
+            '-crf', '20',
             '-c:a', 'aac',
             '-b:a', '128k',
+            '-ar', '44100',
+            '-ac', '2',
             '-movflags', '+faststart',
             '-avoid_negative_ts', 'make_zero',
             '-y',
             str(output_path)
         ]
 
-        print(f'[FFmpeg] Comando: {" ".join(cmd[:6])} ...')
-
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=600)
             print(f'[FFmpeg] Clip {output_path.name} completata con successo')
+            if ass_path and ass_path.exists():
+                try:
+                    ass_path.unlink()
+                except Exception:
+                    pass
             return output_path
         except subprocess.CalledProcessError as e:
             err = e.stderr.decode() if e.stderr else 'unknown'
@@ -300,18 +472,29 @@ class VideoProcessor:
             print(f'[FFmpeg] TIMEOUT conversione clip {output_path.name}')
             raise Exception("Conversion timeout")
 
+    # ------------------------------------------------------------------ #
+    # Filtro bande nere classico
+    # ------------------------------------------------------------------ #
     def _build_filter(self, top_text, bottom_text):
         base_filter = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
         filters = [base_filter]
 
         if top_text and top_text.strip():
             escaped_top = self._escape_text(top_text.strip())
-            top_drawtext = f"drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='{escaped_top}':fontcolor=white:fontsize=56:box=0:x=(w-text_w)/2:y=(h*0.16)-(text_h/2):shadowcolor=black@0.9:shadowx=2:shadowy=2"
+            top_drawtext = (
+                f"drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='{escaped_top}':"
+                f"fontcolor=white:fontsize=56:box=1:boxcolor=black@0.4:boxborderw=10:"
+                f"x=(w-text_w)/2:y=(h*0.16)-(text_h/2):shadowcolor=black@0.9:shadowx=2:shadowy=2"
+            )
             filters.append(top_drawtext)
 
         if bottom_text and bottom_text.strip():
             escaped_bottom = self._escape_text(bottom_text.strip())
-            bottom_drawtext = f"drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='{escaped_bottom}':fontcolor=white:fontsize=56:box=0:wrap_width=w*0.9:x=(w-text_w)/2:y=(h*0.88)-(text_h/2):shadowcolor=black@0.9:shadowx=2:shadowy=2"
+            bottom_drawtext = (
+                f"drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='{escaped_bottom}':"
+                f"fontcolor=white:fontsize=56:box=1:boxcolor=black@0.4:boxborderw=10:"
+                f"wrap_width=w*0.9:x=(w-text_w)/2:y=h*0.88:shadowcolor=black@0.9:shadowx=2:shadowy=2"
+            )
             filters.append(bottom_drawtext)
 
         return ','.join(filters)

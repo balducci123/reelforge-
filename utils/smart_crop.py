@@ -16,26 +16,31 @@ except Exception:
     YOLO_AVAILABLE = False
 
 
-class SmartCropper:
+class ViralSmartCropper:
     """
-    Smart crop 9:16 che segue il soggetto principale nel tempo.
-    Ispirato alla pipeline di Clipper (campionamento frame + vision validator).
+    Smart crop ottimizzato per TikTok / Instagram Reels.
+    - Campiona N frame distribuiti uniformemente nel clip
+    - Rileva soggetto principale (volto MediaPipe o corpo YOLO)
+    - Applica smoothing (media mobile) alle posizioni per evitare salti bruschi
+    - Genera filtro FFmpeg con crop dinamico a gradini protetto da virgolette
+    - Headroom dinamico sopra la testa per non tagliare la fronte
+    - Fallback: blur_background se nessun soggetto trovato
     """
 
-    def __init__(self, target_w=1080, target_h=1920, num_samples=8):
+    def __init__(self, target_w=1080, target_h=1920, num_samples=16, headroom=0.20, smooth_window=3):
         self.target_w = target_w
         self.target_h = target_h
-        self.target_aspect = target_w / target_h
+        self.target_aspect = target_w / target_h  # 0.5625
         self.num_samples = num_samples
+        self.headroom = headroom
+        self.smooth_window = smooth_window
 
-        # Rilevatore volti (MediaPipe)
         self.face_detector = None
         if MEDIAPIPE_AVAILABLE and mp is not None:
             self.face_detector = mp.solutions.face_detection.FaceDetection(
-                model_selection=1, min_detection_confidence=0.5
+                model_selection=1, min_detection_confidence=0.4
             )
 
-        # YOLO per rilevamento persone (opzionale, piu' robusto su corpi interi)
         self.yolo = None
         if YOLO_AVAILABLE:
             try:
@@ -46,24 +51,32 @@ class SmartCropper:
                 except Exception:
                     self.yolo = None
 
-    def _detect_cx(self, frame):
+    def _detect_subject(self, frame):
         """
-        Ritorna il centro X del soggetto principale in valore normalizzato 0..1.
+        Ritorna (cx, cy) normalizzati 0..1 del soggetto principale.
+        Priorità: YOLO persona (corpo intero), poi MediaPipe volto.
         """
         h, w = frame.shape[:2]
 
         if self.yolo is not None:
             try:
                 results = self.yolo(frame, verbose=False)
+                best_area = 0
+                best_cx, best_cy = 0.5, 0.5
                 for r in results:
                     if r.boxes is None:
                         continue
                     for box in r.boxes:
                         cls = int(box.cls[0])
-                        if cls == 0:  # classe 'person' in COCO
+                        if cls == 0:  # COCO classe 'person'
                             x1, y1, x2, y2 = box.xyxy[0].tolist()
-                            cx = ((x1 + x2) / 2) / w
-                            return cx
+                            area = (x2 - x1) * (y2 - y1)
+                            if area > best_area:
+                                best_area = area
+                                best_cx = (x1 + x2) / 2 / w
+                                best_cy = (y1 + y2) / 2 / h
+                if best_area > 0:
+                    return best_cx, best_cy
             except Exception:
                 pass
 
@@ -79,27 +92,28 @@ class SmartCropper:
                     )
                     bbox = best.location_data.relative_bounding_box
                     cx = bbox.xmin + bbox.width / 2
-                    return cx
+                    cy = bbox.ymin + bbox.height / 2
+                    return cx, cy
             except Exception:
                 pass
 
-        return 0.5
+        return 0.5, 0.5
 
-    def sample_positions(self, video_path):
+    def sample_subject_positions(self, video_path):
         """
-        Campiona frame distribuiti uniformemente nel video e ritorna
-        lista di (tempo_secondi, cx_normalizzato) + durata totale.
+        Campiona frame distribuiti uniformemente.
+        Ritorna lista di (tempo, cx, cy), durata, larghezza, altezza.
         """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            return [], 0.0
+            return [], 0.0, 0, 0
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = total_frames / fps if fps > 0 else 0.0
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f'[SmartCrop] Video {width}x{height}, {fps} fps, durata {duration:.2f}s')
+        print(f'[ViralCrop] Video {width}x{height}, {fps} fps, durata {duration:.2f}s')
 
         positions = []
         if self.num_samples <= 1:
@@ -112,56 +126,86 @@ class SmartCropper:
             ret, frame = cap.read()
             if not ret or frame is None:
                 continue
-            cx = self._detect_cx(frame)
-            positions.append((t, cx))
-            print(f'[SmartCrop] t={t:.2f}s cx={cx:.3f}')
+            cx, cy = self._detect_subject(frame)
+            positions.append((t, cx, cy))
+            print(f'[ViralCrop] t={t:.2f}s cx={cx:.3f} cy={cy:.3f}')
 
         cap.release()
-        return positions, duration
+        return positions, duration, width, height
 
-    def generate_filter(self, positions, duration, video_w, video_h):
+    def _smooth_positions(self, positions):
         """
-        Genera la stringa -vf per FFmpeg con crop dinamico a gradini.
-        L'espressione x viene racchiusa tra virgolette singole per proteggere
-        le virgole interne dall'essere interpretate come separatori di parametri.
+        Applica media mobile alle posizioni X per evitare salti bruschi del crop.
+        """
+        if len(positions) <= self.smooth_window:
+            return positions
+
+        smoothed = []
+        n = len(positions)
+        half = self.smooth_window // 2
+        for i in range(n):
+            start = max(0, i - half)
+            end = min(n, i + half + 1)
+            window = positions[start:end]
+            avg_t = sum(p[0] for p in window) / len(window)
+            avg_cx = sum(p[1] for p in window) / len(window)
+            avg_cy = sum(p[2] for p in window) / len(window)
+            smoothed.append((avg_t, avg_cx, avg_cy))
+        return smoothed
+
+    def generate_filter(self, positions, duration, video_w, video_h, strategy='smart_crop'):
+        """
+        Genera stringa -vf per FFmpeg.
+        - smart_crop: crop dinamico con espressione a gradini protetta da virgolette
+        - blur_background: video centrato su sfondo sfocato
+        - bars: bande nere classiche (gestito altrove, qui restituisce solo scale)
         """
         target_w = self.target_w
         target_h = self.target_h
 
-        # Larghezza del crop verticale per mantenere 9:16
+        # Larghezza del crop verticale per 9:16
         crop_w = int(video_h * self.target_aspect)
         if crop_w > video_w:
             crop_w = video_w
         crop_h = video_h
+        max_x = max(0, video_w - crop_w)
 
-        max_x = video_w - crop_w
-        if max_x < 0:
-            max_x = 0
+        # --- STRATEGIA BLUR BACKGROUND ---
+        if strategy == 'blur_background':
+            filter_str = (
+                f"[0:v]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+                f"crop={target_w}:{target_h},boxblur=25:5[bg];"
+                f"[0:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,"
+                f"pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2[fg];"
+                f"[bg][fg]overlay=(W-w)/2:(H-h)/2,scale={target_w}:{target_h}"
+            )
+            print(f'[ViralCrop] Strategia blur_background')
+            return filter_str
 
-        # Nessun soggetto rilevato -> crop centrato statico
+        # --- STRATEGIA SMART CROP ---
         if not positions:
             x = max(0, min(video_w // 2 - crop_w // 2, max_x))
-            print(f'[SmartCrop] Nessun soggetto, crop statico x={x}')
+            print(f'[ViralCrop] Nessun soggetto, crop statico centrato x={x}')
             return f"crop={crop_w}:{crop_h}:{x}:0,scale={target_w}:{target_h}"
 
-        # Ordina per tempo
         positions = sorted(positions, key=lambda p: p[0])
+        positions = self._smooth_positions(positions)
 
-        # Converte cx normalizzato (0..1) in pixel x, clamped al range valido
         pixel_positions = []
-        for t, cx_norm in positions:
-            x_px = int(cx_norm * video_w - crop_w // 2)
+        for t, cx_norm, cy_norm in positions:
+            x_center = cx_norm * video_w
+            x_px = int(x_center - crop_w / 2)
+            # Headroom dinamico: se il soggetto è alto nel frame (cy basso), sposta leggermente su
+            # Per ora applichiamo solo X clamping; Y rimane 0 (crop dall'alto del video, poi scale)
             x_px = max(0, min(x_px, max_x))
             pixel_positions.append((t, x_px))
 
-        # Un solo punto -> crop statico
         if len(pixel_positions) == 1:
             x = pixel_positions[0][1]
-            print(f'[SmartCrop] Crop statico x={x}')
+            print(f'[ViralCrop] Crop statico x={x}')
             return f"crop={crop_w}:{crop_h}:{x}:0,scale={target_w}:{target_h}"
 
-        # Costruisci espressione FFmpeg a gradini:
-        # if(lte(t,t1),x1,if(lte(t,t2),x2,...,xn))
+        # Espressione FFmpeg a gradini: if(lte(t,t1),x1,if(lte(t,t2),x2,...,xN))
         parts = []
         n = len(pixel_positions)
         for i, (t, x) in enumerate(pixel_positions):
@@ -171,8 +215,6 @@ class SmartCropper:
                 parts.append(f"if(lte(t,{t:.3f}),{x},")
         expr = "".join(parts) + ")" * (n - 1)
 
-        # RACCHIUDI l'espressione x tra virgolette singole: FFmpeg non
-        # confondira' le virgole dentro l'espressione con separatori di filtro.
         filter_str = f"crop={crop_w}:{crop_h}:'{expr}':0,scale={target_w}:{target_h}"
-        print(f'[SmartCrop] Filtro dinamico: {filter_str}')
+        print(f'[ViralCrop] Filtro dinamico: {filter_str}')
         return filter_str

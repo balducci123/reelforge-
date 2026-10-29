@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ReelForge - AI Vertical Clip Generator</title>
+    <title>ReelForge - AI Viral Clip Generator</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -32,6 +32,11 @@
         .clip-card-dark:hover { transform: translateY(-8px) scale(1.02); box-shadow: 0 35px 70px -12px rgba(99,102,241,0.45); border-color: rgba(129,140,248,0.6); }
         .shimmer-bar { background: linear-gradient(90deg, transparent 0%, rgba(165,180,252,0.9) 50%, transparent 100%); background-size: 200% 100%; animation: shimmerMove 2s infinite; }
         @keyframes shimmerMove { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        .feature-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+        .badge-smart { background: rgba(16, 185, 129, 0.15); color: #4ade80; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-karaoke { background: rgba(236, 72, 153, 0.15); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.3); }
+        .badge-blur { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+        .badge-ai { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
     </style>
 </head>
 <body class="min-h-screen text-white">
@@ -50,18 +55,19 @@
                 </svg>
             </div>
             <h1 class="text-5xl md:text-7xl font-black mb-4 tracking-tight"><span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">REELFORGE</span></h1>
-            <p class="text-xl md:text-2xl text-slate-300 font-light">All-in-One AI Platform • Smart Reframe • Whisper • Real-Time</p>
+            <p class="text-xl md:text-2xl text-slate-300 font-light">Viral Vertical Clips • Smart Crop • Karaoke • AI Hook Detection • Real-Time</p>
             <div class="mt-5 flex flex-wrap items-center justify-center gap-2 text-sm text-slate-300">
                 <span class="px-3 py-1 glass rounded-full">9:16 Vertical</span>
-                <span class="px-3 py-1 glass rounded-full">Full Screen Smart Crop</span>
-                <span class="px-3 py-1 glass rounded-full">AI Transcription</span>
-                <span class="px-3 py-1 glass rounded-full">Live Progress</span>
+                <span class="px-3 py-1 glass rounded-full">Smart Face Crop</span>
+                <span class="px-3 py-1 glass rounded-full">Karaoke Subs</span>
+                <span class="px-3 py-1 glass rounded-full">AI Hook Score</span>
             </div>
         </header>
 
         <main class="slide-up">
             <div class="glass-card rounded-[2.5rem] overflow-hidden">
                 <div class="p-8 md:p-12 space-y-8">
+                    <!-- YouTube URL / Local Upload -->
                     <div class="space-y-3">
                         <label class="flex items-center text-sm font-semibold text-slate-200"><svg class="w-5 h-5 mr-2 text-indigo-400" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg> YouTube URL <span class="text-slate-500">(oppure carica un file locale)</span></label>
                         <input type="url" id="youtube_url" class="w-full px-6 py-4 glass text-white placeholder-slate-500 rounded-2xl input-glow focus:outline-none" placeholder="https://www.youtube.com/watch?v=...">
@@ -72,6 +78,7 @@
                         </label>
                     </div>
 
+                    <!-- Clip Controls -->
                     <div class="grid md:grid-cols-2 gap-6">
                         <div class="space-y-4">
                             <div class="flex items-center justify-between"><label class="text-sm font-semibold text-slate-200">Durata per Clip</label><div class="flex items-baseline space-x-2"><span class="text-3xl font-black bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent" id="durationDisplay">30</span><span class="text-sm text-slate-400">sec</span></div></div>
@@ -85,37 +92,69 @@
                         </div>
                     </div>
 
+                    <!-- Ritaglio -->
                     <div class="space-y-4">
-                        <label class="text-sm font-semibold text-slate-200">Modalità di Ritaglio</label>
+                        <label class="text-sm font-semibold text-slate-200">Strategia di Ritaglio</label>
                         <div class="grid md:grid-cols-2 gap-4">
-                            <label class="flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition">
-                                <input type="radio" name="mode" value="bars" checked class="accent-indigo-500">
+                            <label class="flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition group">
+                                <input type="radio" name="crop_strategy" value="smart_crop" checked class="accent-indigo-500">
                                 <div>
-                                    <p class="font-semibold">Con Bande Nere (Classico)</p>
-                                    <p class="text-xs text-slate-400">Adatta mantenendo tutto il video con padding</p>
+                                    <div class="flex items-center gap-2 mb-1"><span class="feature-badge badge-smart">Smart Crop</span></div>
+                                    <p class="font-semibold">Segue il soggetto</p>
+                                    <p class="text-xs text-slate-400">Face tracking dinamico 9:16 full screen</p>
                                 </div>
                             </label>
-                            <label class="flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition">
-                                <input type="radio" name="mode" value="smart_crop" class="accent-purple-500">
+                            <label class="flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition group">
+                                <input type="radio" name="crop_strategy" value="blur_background" class="accent-blue-500">
                                 <div>
-                                    <p class="font-semibold">Full Screen Smart Crop (9:16)</p>
-                                    <p class="text-xs text-slate-400">Face tracking + crop dinamico sul protagonista</p>
+                                    <div class="flex items-center gap-2 mb-1"><span class="feature-badge badge-blur">Blur BG</span></div>
+                                    <p class="font-semibold">Sfondo Sfocato</p>
+                                    <p class="text-xs text-slate-400">Video centrato su canvas sfocato (multi-soggetto)</p>
                                 </div>
                             </label>
                         </div>
                     </div>
 
-                    <div class="flex items-center justify-between glass rounded-2xl p-5">
-                        <div>
-                            <p class="font-semibold">Taglio Intelligente con Whisper</p>
-                            <p class="text-xs text-slate-400">Taglia in base a frasi e momenti parlati per tagli più naturali</p>
+                    <!-- AI Features -->
+                    <div class="space-y-3">
+                        <div class="flex items-center justify-between glass rounded-2xl p-4 group">
+                            <div>
+                                <p class="font-semibold">Taglio Intelligente Whisper</p>
+                                <p class="text-xs text-slate-400">Taglia a frasi complete, non a metà parola</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="use_whisper" class="sr-only peer peer-checked:bg-gradient-to-r peer-checked:from-indigo-500 peer-checked:to-purple-500">
+                                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                            </label>
                         </div>
-                        <label class="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" id="use_whisper" class="sr-only peer">
-                            <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-indigo-500 peer-checked:to-purple-500"></div>
-                        </label>
+                        <div class="flex items-center justify-between glass rounded-2xl p-4 group">
+                            <div>
+                                <p class="font-semibold">Sottotitoli Karaoke</p>
+                                <p class="text-xs text-slate-400">Parola evidenziata in giallo mentre viene detta</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="use_karaoke" class="sr-only peer peer-checked:bg-gradient-to-r peer-checked:from-pink-500 peer-checked:to-rose-500">
+                                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                            </label>
+                        </div>
+                        <div class="flex items-center justify-between glass rounded-2xl p-4 group">
+                            <div>
+                                <p class="font-semibold">Selezione Automatica AI</p>
+                                <p class="text-xs text-slate-400">Sceglie solo i candidati con punteggio più alto</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="auto_select" checked class="sr-only peer peer-checked:bg-gradient-to-r peer-checked:from-amber-500 peer-checked:to-orange-500">
+                                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                            </label>
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Soglia punteggio minimo</label>
+                            <input type="range" id="min_score" min="0" max="100" value="60" step="10" class="range-slider-dark w-full">
+                            <div class="flex justify-between text-[10px] text-slate-500 mt-1"><span>Basso</span><span>Alto</span></div>
+                        </div>
                     </div>
 
+                    <!-- Text Overlays -->
                     <div class="grid md:grid-cols-2 gap-6">
                         <div class="space-y-3">
                             <label class="text-sm font-semibold text-slate-200">Testo Banda Superiore <span class="text-slate-500">(opzionale)</span></label>
@@ -127,22 +166,24 @@
                         </div>
                     </div>
 
+                    <!-- Preview -->
                     <div class="glass rounded-2xl p-6 space-y-4">
                         <h3 class="text-sm font-semibold text-slate-200">Anteprima Parametri</h3>
                         <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
                             <div><p class="text-slate-500 mb-1">Formato</p><p class="text-white font-medium">Verticale 9:16</p></div>
                             <div><p class="text-slate-500 mb-1">Durata Clip</p><p class="text-white font-medium"><span id="previewDuration">30</span> sec</p></div>
                             <div><p class="text-slate-500 mb-1">Clip</p><p class="text-white font-medium"><span id="previewClips">3</span></p></div>
-                            <div><p class="text-slate-500 mb-1">Modalità</p><p class="text-white font-medium" id="previewMode">Bande Nere</p></div>
-                            <div><p class="text-slate-500 mb-1">Whisper</p><p class="text-white font-medium" id="previewWhisper">No</p></div>
+                            <div><p class="text-slate-500 mb-1">Ritaglio</p><p class="text-white font-medium" id="previewCrop">Smart Crop</p></div>
+                            <div><p class="text-slate-500 mb-1">Karaoke</p><p class="text-white font-medium" id="previewKaraoke">No</p></div>
                         </div>
                     </div>
 
                     <button id="convertBtn" class="btn-glow w-full px-8 py-5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white font-bold text-lg rounded-2xl focus:outline-none">
-                        <span class="flex items-center justify-center"><svg class="w-6 h-6 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span id="btnText">AVVIA ELABORAZIONE INTELLIGENTE</span></span>
+                        <span class="flex items-center justify-center"><svg class="w-6 h-6 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span id="btnText">AVVIA ELABORAZIONE VIRAL</span></span>
                     </button>
                 </div>
 
+                <!-- Loading -->
                 <div id="loadingState" class="hidden p-8 md:p-12 border-t border-white/5">
                     <div class="flex items-center space-x-6 mb-8">
                         <div class="relative">
@@ -150,7 +191,7 @@
                             <div class="w-20 h-20 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin absolute top-0 left-0"></div>
                         </div>
                         <div class="flex-1">
-                            <p class="text-2xl font-bold mb-2">Elaborazione in Tempo Reale</p>
+                            <p class="text-2xl font-bold mb-2">Elaborazione Viral in Corso</p>
                             <p class="text-slate-400" id="progressStatus">Inizializzazione...</p>
                         </div>
                         <div class="text-right">
@@ -162,14 +203,15 @@
                     </div>
                 </div>
 
+                <!-- Results -->
                 <div id="resultsState" class="hidden border-t border-white/5">
                     <div class="p-8 md:p-12">
                         <div class="flex flex-col md:flex-row items-start md:items-center justify-between mb-10 space-y-4 md:space-y-0">
                             <div class="flex items-center space-x-5">
                                 <div class="w-16 h-16 bg-gradient-to-br from-green-400 to-emerald-500 rounded-2xl flex items-center justify-center shadow-lg shadow-green-500/40"><svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg></div>
                                 <div>
-                                    <h2 class="text-3xl font-bold mb-1">Generazione Completata</h2>
-                                    <p class="text-slate-400"><span id="successCount" class="text-green-400 font-semibold">0</span> clip generate • <span id="cacheStatus"></span></p>
+                                    <h2 class="text-3xl font-bold mb-1">Clip Virali Generate</h2>
+                                    <p class="text-slate-400"><span id="successCount" class="text-green-400 font-semibold">0</span> clip • <span id="cacheStatus"></span></p>
                                 </div>
                             </div>
                             <button id="newGenerationBtn" class="px-6 py-3 glass text-slate-300 font-medium rounded-xl hover:bg-white/5 transition-all">Nuova Generazione</button>
@@ -178,6 +220,7 @@
                     </div>
                 </div>
 
+                <!-- Error -->
                 <div id="errorState" class="hidden p-8 md:p-12 border-t border-white/5">
                     <div class="flex items-start space-x-5 mb-6">
                         <div class="flex-shrink-0 w-16 h-16 bg-red-500/20 rounded-2xl flex items-center justify-center"><svg class="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg></div>
@@ -188,7 +231,7 @@
             </div>
         </main>
 
-        <footer class="text-center mt-12 text-sm text-slate-500 fade-in"><p>ReelForge • Flask • FFmpeg • OpenCV • MediaPipe • Whisper • Socket.IO</p></footer>
+        <footer class="text-center mt-12 text-sm text-slate-500 fade-in"><p>ReelForge • Flask • FFmpeg • faster-whisper • librosa • OpenCV • MediaPipe • Socket.IO</p></footer>
     </div>
 
     <script>
@@ -211,17 +254,18 @@
         const previewClips = document.getElementById('previewClips');
         const topTextInput = document.getElementById('top_text');
         const bottomTextInput = document.getElementById('bottom_text');
-        const previewMode = document.getElementById('previewMode');
-        const previewWhisper = document.getElementById('previewWhisper');
+        const previewCrop = document.getElementById('previewCrop');
+        const previewKaraoke = document.getElementById('previewKaraoke');
         const useWhisper = document.getElementById('use_whisper');
+        const useKaraoke = document.getElementById('use_karaoke');
         const progressBar = document.getElementById('progressBar');
         const progressPercent = document.getElementById('progressPercent');
         const progressStatus = document.getElementById('progressStatus');
 
         clipDurationSlider.addEventListener('input', (e) => { durationDisplay.textContent = e.target.value; previewDuration.textContent = e.target.value; });
         numClipsSlider.addEventListener('input', (e) => { numClipsDisplay.textContent = e.target.value; previewClips.textContent = e.target.value; });
-        document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', (e) => { previewMode.textContent = e.target.value === 'smart_crop' ? 'Smart Crop' : 'Bande Nere'; }));
-        useWhisper.addEventListener('change', (e) => { previewWhisper.textContent = e.target.checked ? 'Sì' : 'No'; });
+        document.querySelectorAll('input[name="crop_strategy"]').forEach(r => r.addEventListener('change', (e) => { previewCrop.textContent = e.target.value === 'blur_background' ? 'Sfondo Sfocato' : 'Smart Crop'; }));
+        useKaraoke.addEventListener('change', (e) => { previewKaraoke.textContent = e.target.checked ? 'Sì' : 'No'; });
 
         socket.on('job_progress', (data) => {
             progressBar.style.width = data.progress + '%';
@@ -245,7 +289,6 @@
 
         const localVideoInput = document.getElementById('local_video');
         const localVideoLabel = document.getElementById('localVideoLabel');
-        let localVideoPath = null;
         localVideoInput.addEventListener('change', (e) => {
             const f = e.target.files[0];
             if (f) {
@@ -253,26 +296,29 @@
                 console.log('[ReelForge] File locale selezionato:', f.name);
             } else {
                 localVideoLabel.textContent = 'Carica un video locale (mp4/mov)';
-                localVideoPath = null;
             }
         });
 
         convertBtn.addEventListener('click', async () => {
-            console.log('[ReelForge] Click su "AVVIA ELABORAZIONE INTELLIGENTE"');
+            console.log('[ReelForge] Click su "AVVIA ELABORAZIONE VIRAL"');
             const youtubeUrl = document.getElementById('youtube_url').value;
             const topText = document.getElementById('top_text').value;
             const bottomText = document.getElementById('bottom_text').value;
             const clipDuration = document.getElementById('clip_duration').value;
             const numClips = document.getElementById('num_clips').value;
-            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const mode = document.querySelector('input[name="mode"]:checked')?.value || 'bars';
+            const cropStrategy = document.querySelector('input[name="crop_strategy"]:checked')?.value || 'smart_crop';
             const whisper = document.getElementById('use_whisper').checked;
+            const karaoke = document.getElementById('use_karaoke').checked;
+            const autoSelect = document.getElementById('auto_select').checked;
+            const minScore = document.getElementById('min_score').value;
             if (!youtubeUrl && !localVideoInput.files[0]) { showError('Inserisci un link YouTube oppure carica un file video locale'); return; }
             resultsState.classList.add('hidden');
             errorState.classList.add('hidden');
             loadingState.classList.remove('hidden');
             progressBar.style.width = '0%';
             progressPercent.textContent = '0%';
-            progressStatus.textContent = 'Avvio elaborazione...';
+            progressStatus.textContent = 'Avvio elaborazione viral...';
             convertBtn.disabled = true;
             convertBtn.classList.add('opacity-50','cursor-not-allowed');
             try {
@@ -295,7 +341,11 @@
                     clip_duration: parseFloat(clipDuration),
                     num_clips: parseInt(numClips),
                     mode,
-                    use_whisper: whisper
+                    crop_strategy: cropStrategy,
+                    use_whisper: whisper,
+                    use_karaoke: karaoke,
+                    auto_select: autoSelect,
+                    min_score: parseInt(minScore)
                 };
                 console.log('[ReelForge] Emit Socket.IO start_processing', payload);
                 socket.emit('start_processing', payload, (resp) => {
@@ -318,7 +368,9 @@
                 card.className = 'clip-card-dark scale-in glass-card rounded-2xl overflow-hidden';
                 card.style.animationDelay = index*0.08+'s';
                 if (clip.success) {
-                    card.innerHTML = `<div class="p-5"><div class="flex items-center justify-between mb-4"><div class="flex items-center space-x-3"><div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-xl flex items-center justify-center text-white font-bold">${clip.index}</div><div><p class="font-semibold">Clip ${clip.index}</p><p class="text-xs text-slate-400">${clip.duration}s • 1080 × 1920</p></div></div><div class="text-xs px-2 py-1 glass rounded-lg text-slate-300">${clip.cached?'Cache':'Nuovo'}</div></div><a href="${clip.download_url}" class="flex items-center justify-center w-full px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-medium rounded-xl">Scarica</a></div>`;
+                    const score = (clip.score && clip.score.total) ? clip.score.total : '-';
+                    const grade = (clip.score && clip.score.grade) ? clip.score.grade : '';
+                    card.innerHTML = `<div class="p-5"><div class="flex items-center justify-between mb-4"><div class="flex items-center space-x-3"><div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-xl flex items-center justify-center text-white font-bold">${clip.index}</div><div><p class="font-semibold">Clip ${clip.index}</p><p class="text-xs text-slate-400">${clip.duration}s • 1080 × 1920 ${grade ? `• Score: ${score}/${grade}` : ''}</p></div></div><div class="text-xs px-2 py-1 glass rounded-lg text-slate-300">${clip.cached?'Cache':'Nuovo'}</div></div><div class="mt-3 p-3 bg-slate-800/50 rounded-xl text-xs text-slate-300 font-light truncate max-w-full">${clip.text || ''}</div><a href="${clip.download_url}" class="flex items-center justify-center w-full px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-medium rounded-xl mt-2">Scarica</a></div>`;
                 } else {
                     card.innerHTML = `<div class="p-5"><div class="flex items-center space-x-3 mb-4"><div class="w-10 h-10 bg-slate-700 rounded-xl flex items-center justify-center text-slate-400">${clip.index}</div><p class="font-semibold">Clip ${clip.index}</p></div><div class="px-4 py-3 bg-red-500/10 text-red-400 text-xs rounded-xl">${clip.error}</div></div>`;
                 }
