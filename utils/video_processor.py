@@ -3,9 +3,7 @@ import subprocess
 import uuid
 import json
 import re
-import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from .smart_crop import ViralSmartCropper
 from .transcriber import Transcriber
 from .audio_analyzer import AudioAnalyzer
@@ -62,7 +60,6 @@ class VideoProcessor:
             raise Exception(f"Failed to get video duration: {str(e)}")
 
     def is_vertical(self, video_path):
-        """Ritorna True se il video è già verticale (altezza > larghezza)."""
         cmd = [
             'ffprobe', '-v', 'quiet', '-print_format', 'json',
             '-show_streams', str(video_path)
@@ -81,7 +78,7 @@ class VideoProcessor:
             return False
 
     # ------------------------------------------------------------------ #
-    # Download (yt-dlp con EJS fallback + file locale)
+    # Download
     # ------------------------------------------------------------------ #
     def download_video(self, youtube_url, proxy_url=None, local_video_path=None):
         video_id = str(uuid.uuid4())
@@ -156,13 +153,6 @@ class VideoProcessor:
     # ASS Subtitle generator (karaoke parola per parola, safe zone TikTok)
     # ------------------------------------------------------------------ #
     def generate_ass_subtitles(self, words, output_path, style_name='Default'):
-        """
-        Genera file .ass con sottotitoli karaoke ottimizzati per TikTok/Reels:
-        - Parola attiva: giallo #FFE135, font 62pt, contorno nero spesso
-        - Altre parole: bianco, font 48pt
-        - Posizione: centro-basso (safe zone, sopra la zona like/commenti)
-        - Ombra per leggibilità
-        """
         if not words:
             output_path.write_text(
                 '[Script Info]\nTitle: ReelForge\nScriptType: v4.00+\n'
@@ -178,14 +168,11 @@ class VideoProcessor:
             )
             return output_path
 
-        max_time = words[-1]['end'] if words else 0
         events = []
-
-        for i, w in enumerate(words):
+        for w in words:
             start = self._format_ass_time(w['start'])
             end = self._format_ass_time(w['end'])
             word_text = w['word'].replace('{', '\\{').replace('}', '\\}')
-            # Parola attiva: giallo, grasso, font più grande
             events.append(
                 f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,"
                 f"{{\\c&H00E1FF&\\b1\\fs66\\3c&H000000&\\4c&H000000&\\3a&H60&\\4a&H60&}}"
@@ -220,8 +207,8 @@ class VideoProcessor:
     # Smart split con Whisper + Audio Analyzer + Clip Scorer
     # ------------------------------------------------------------------ #
     def split_by_duration(self, input_path, clip_duration, num_clips=None, top_text="", bottom_text="",
-                          max_workers=1, output_folder=None, mode='bars', use_whisper=False,
-                          crop_strategy='smart_crop', use_karaoke=False,
+                          max_workers=1, output_folder=None, crop_strategy='smart_crop',
+                          use_whisper=False, use_karaoke=False,
                           progress_callback=None, auto_select=True, min_score=60):
         clip_duration = int(round(float(clip_duration)))
         if clip_duration < 30 or clip_duration > 60:
@@ -238,15 +225,14 @@ class VideoProcessor:
                 num_clips = 10
 
         print(f'[VideoProcessor] Video verticale: {is_vid_vertical} | Durata: {duration:.2f}s | '
-              f'Richeste: {num_clips} clip da {clip_duration}s')
+              f'Richeste: {num_clips} clip da {clip_duration}s | crop={crop_strategy}')
 
         target_folder = Path(output_folder) if output_folder else self.output_dir
         target_folder.mkdir(parents=True, exist_ok=True)
 
-        # --- Fase 1: Analisi audio per punti di taglio ottimali ---
+        # --- Fase 1: Analisi audio ---
         audio_analysis = self.audio_analyzer.analyze(input_path)
-        print(f'[AudioAnalyzer] Picchi: {audio_analysis["peak_times"][:5]}... | '
-              f'Silenzi: {len(audio_analysis["silent_ranges"])}')
+        print(f'[AudioAnalyzer] Picchi: {audio_analysis["peak_times"][:5]}... | Silenzi: {len(audio_analysis["silent_ranges"])}')
 
         # --- Fase 2: Candidati iniziali ---
         start_times = None
@@ -265,7 +251,6 @@ class VideoProcessor:
                 print(f'[VideoProcessor] Whisper fallito, uso audio analyzer: {e}')
                 start_times = None
 
-        # Fallback: usa audio analyzer per trovare punti di taglio
         if not start_times or len(start_times) < num_clips:
             auto_cuts = self.audio_analyzer.find_best_cut_points(
                 audio_analysis, num_clips=num_clips,
@@ -274,14 +259,13 @@ class VideoProcessor:
             start_times = [c['start'] for c in auto_cuts]
             print(f'[AudioAnalyzer] Cut points automatici: {start_times[:num_clips]}')
 
-        # Assicura numero sufficiente di candidati
         while len(start_times) < num_clips:
             s = len(start_times) * clip_duration
             if s >= duration:
                 break
             start_times.append(round(s, 2))
 
-        # --- Fase 3: Costruisci task e valuta con Clip Scorer ---
+        # --- Fase 3: Costruisci task ---
         raw_tasks = []
         for i in range(num_clips):
             start_time = start_times[i] if i < len(start_times) else i * clip_duration
@@ -294,8 +278,6 @@ class VideoProcessor:
             clip_id = str(uuid.uuid4())
             output_filename = f"clip_{i+1}_{clip_id}.mp4"
             clip_words = [w for w in all_words if start_time <= w['start'] and w['end'] <= start_time + actual_duration]
-
-            # Testo del clip per scoring hook
             clip_text = ' '.join(w['word'] for w in clip_words)
 
             raw_tasks.append({
@@ -308,14 +290,12 @@ class VideoProcessor:
                 'has_hook': any(hw in clip_text.lower() for hw in self.transcriber.HOOK_WORDS)
             })
 
-        # Applica Clip Scorer se auto_select attivo
-        face_detected = True  # placeholder, verrà aggiornato dopo smart crop
+        # Applica Clip Scorer
         if auto_select and raw_tasks:
             scored = self.clip_scorer.rank_candidates(
                 raw_tasks, audio_analysis=audio_analysis,
-                face_present=face_detected, top_n=num_clips
+                face_present=True, top_n=num_clips
             )
-            # Ri-indexa dopo selezione
             tasks = []
             for new_idx, c in enumerate(scored, 1):
                 c['index'] = new_idx
@@ -326,7 +306,7 @@ class VideoProcessor:
         total_tasks = len(tasks)
         print(f'[VideoProcessor] Totale task da eseguire: {total_tasks}')
 
-        # --- Fase 4: Esecuzione conversione ---
+        # --- Fase 4: Esecuzione ---
         results = []
         for idx, task in enumerate(tasks):
             if progress_callback:
@@ -338,8 +318,7 @@ class VideoProcessor:
 
             print(f'[VideoProcessor] Clip {task["index"]}/{total_tasks}: '
                   f'start={task["start_time"]}s dur={task["duration"]}s '
-                  f'mode={mode} crop={crop_strategy} karaoke={use_karaoke} '
-                  f'score={task.get("score", {}).get("total", "N/A")}')
+                  f'crop={crop_strategy} karaoke={use_karaoke}')
 
             try:
                 output_path = self._convert_clip_segment_viral(
@@ -350,7 +329,6 @@ class VideoProcessor:
                     top_text,
                     bottom_text,
                     target_folder,
-                    mode=mode,
                     crop_strategy=crop_strategy,
                     use_karaoke=use_karaoke,
                     words=task['words'],
@@ -387,37 +365,51 @@ class VideoProcessor:
         return results
 
     # ------------------------------------------------------------------ #
-    # Conversione singola clip con smart crop, karaoke, normalizzazione audio
+    # Conversione singola clip
     # ------------------------------------------------------------------ #
     def _convert_clip_segment_viral(self, input_path, start_time, duration, output_filename,
                                     top_text, bottom_text, target_folder=None,
-                                    mode='bars', crop_strategy='smart_crop',
+                                    crop_strategy='smart_crop',
                                     use_karaoke=False, words=None, is_vertical=False):
         folder = Path(target_folder) if target_folder else self.output_dir
         folder.mkdir(parents=True, exist_ok=True)
         output_path = folder / output_filename
 
         print(f'[FFmpeg] Clip: start={start_time}s dur={duration}s output={output_path.name} '
-              f'mode={mode} crop={crop_strategy} karaoke={use_karaoke} vertical_input={is_vertical}')
+              f'crop={crop_strategy} karaoke={use_karaoke} vertical_input={is_vertical}')
 
         # --- Filtro video ---
         video_filter_parts = []
 
-        if is_vertical and mode == 'bars':
-            # Video già verticale: solo scale per uniformità, niente crop
-            video_filter_parts.append(f"scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black")
-        elif mode == 'smart_crop':
+        if crop_strategy == 'smart_crop':
             try:
-                positions, vid_duration, w, h = self.smart_cropper.sample_positions(input_path)
+                positions, vid_duration, w, h = self.smart_cropper.sample_subject_positions(input_path)
                 crop_filter = self.smart_cropper.generate_filter(
-                    positions, vid_duration, w, h, strategy=crop_strategy
+                    positions, vid_duration, w, h, strategy='smart_crop'
                 )
                 video_filter_parts.append(crop_filter)
+                print(f'[SmartCrop] Filtro applicato: {crop_filter}')
             except Exception as e:
                 print(f'[SmartCrop] Errore, fallback a bande nere: {e}')
                 video_filter_parts.append(self._build_filter(top_text, bottom_text))
+
+        elif crop_strategy == 'blur_background':
+            # Usa direttamente il filtro blur_background dal smart_cropper
+            try:
+                positions, vid_duration, w, h = self.smart_cropper.sample_subject_positions(input_path)
+                blur_filter = self.smart_cropper.generate_filter(
+                    positions, vid_duration, w, h, strategy='blur_background'
+                )
+                video_filter_parts.append(blur_filter)
+                print(f'[BlurBG] Filtro applicato: {blur_filter}')
+            except Exception as e:
+                print(f'[BlurBG] Errore, fallback a bande nere: {e}')
+                video_filter_parts.append(self._build_filter(top_text, bottom_text))
+
         else:
+            # Bande nere classico
             video_filter_parts.append(self._build_filter(top_text, bottom_text))
+            print(f'[Bars] Filtro bande nere applicato')
 
         # --- Sottotitoli karaoke (ASS) ---
         ass_path = None
@@ -427,12 +419,13 @@ class VideoProcessor:
             self.generate_ass_subtitles(words, ass_path)
             ass_path_str = str(ass_path).replace('\\', '/')
             video_filter_parts.append(f"ass='{ass_path_str}'")
+            print(f'[Subtitles] Aggiunto overlay ASS: {ass_path_str}')
 
         filter_complex = ','.join(video_filter_parts)
-        print(f'[FFmpeg] Filter: {filter_complex}')
+        print(f'[FFmpeg] Filter completo: {filter_complex}')
 
-        # --- Filtro audio: normalizzazione loudnorm per volume consistente ---
-        audio_filter = "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=summary"
+        # --- Filtro audio: normalizzazione loudnorm ---
+        audio_filter = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
         cmd = [
             'ffmpeg',

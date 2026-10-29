@@ -28,17 +28,16 @@ def process_job(job_id, data):
         bottom_text = data.get('bottom_text', '').strip()
         clip_duration = int(float(data.get('clip_duration') or 30))
         num_clips = data.get('num_clips')
-        mode = data.get('mode', 'bars')
+        crop_strategy = data.get('crop_strategy', 'smart_crop')  # smart_crop | blur_background | bars
         use_whisper = bool(data.get('use_whisper', False))
-        proxy_url = data.get('proxy_url', '').strip()
-        local_video_path = data.get('local_video_path')
-        crop_strategy = data.get('crop_strategy', 'smart_crop')
         use_karaoke = bool(data.get('use_karaoke', False))
         auto_select = bool(data.get('auto_select', True))
         min_score = int(data.get('min_score', 60))
+        proxy_url = data.get('proxy_url', '').strip()
+        local_video_path = data.get('local_video_path')
 
         print(f'[ReelForge][{job_id}] Avvio: {youtube_url or local_video_path} | '
-              f'clip={clip_duration}s n={num_clips} mode={mode} crop={crop_strategy} '
+              f'clip={clip_duration}s n={num_clips} crop={crop_strategy} '
               f'whisper={use_whisper} karaoke={use_karaoke} auto_select={auto_select} min_score={min_score}')
 
         if num_clips is not None:
@@ -80,8 +79,8 @@ def process_job(job_id, data):
             clip_duration=clip_duration, num_clips=num_clips,
             top_text=top_text, bottom_text=bottom_text,
             max_workers=1, output_folder=video_folder,
-            mode=mode, use_whisper=use_whisper,
             crop_strategy=crop_strategy,
+            use_whisper=use_whisper,
             use_karaoke=use_karaoke,
             auto_select=auto_select,
             min_score=min_score,

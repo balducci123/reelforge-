@@ -306,7 +306,6 @@
             const bottomText = document.getElementById('bottom_text').value;
             const clipDuration = document.getElementById('clip_duration').value;
             const numClips = document.getElementById('num_clips').value;
-            const mode = document.querySelector('input[name="mode"]:checked')?.value || 'bars';
             const cropStrategy = document.querySelector('input[name="crop_strategy"]:checked')?.value || 'smart_crop';
             const whisper = document.getElementById('use_whisper').checked;
             const karaoke = document.getElementById('use_karaoke').checked;
@@ -340,7 +339,6 @@
                     bottom_text: bottomText,
                     clip_duration: parseFloat(clipDuration),
                     num_clips: parseInt(numClips),
-                    mode,
                     crop_strategy: cropStrategy,
                     use_whisper: whisper,
                     use_karaoke: karaoke,
