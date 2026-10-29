@@ -1,0 +1,206 @@
+{
+  "communities": {
+    "0": [
+      "utils_face_tracker_facetracker",
+      "utils_face_tracker_facetracker_find_best_crop",
+      "utils_face_tracker_facetracker_generate_smart_crop_filter",
+      "utils_face_tracker_facetracker_get_crop_regions",
+      "utils_face_tracker_facetracker_init",
+      "utils_video_processor_rationale_225",
+      "utils_video_processor_rationale_283",
+      "utils_video_processor_rationale_302",
+      "utils_video_processor_videoprocessor_build_filter",
+      "utils_video_processor_videoprocessor_convert_clip_segment",
+      "utils_video_processor_videoprocessor_escape_text"
+    ],
+    "1": [
+      "concurrent_futures",
+      "cv2",
+      "json",
+      "mediapipe",
+      "numpy",
+      "os",
+      "pathlib",
+      "subprocess",
+      "utils_face_tracker",
+      "utils_transcriber",
+      "utils_video_processor",
+      "whisper"
+    ],
+    "2": [
+      "app_convert",
+      "app_download",
+      "app_index",
+      "app_rationale_169",
+      "route"
+    ],
+    "3": [
+      "utils_transcriber_transcriber_transcribe",
+      "utils_video_processor_rationale_126",
+      "utils_video_processor_rationale_40",
+      "utils_video_processor_videoprocessor_get_video_duration",
+      "utils_video_processor_videoprocessor_split_by_duration"
+    ],
+    "4": [
+      "utils_video_processor_rationale_313",
+      "utils_video_processor_rationale_58",
+      "utils_video_processor_videoprocessor_cleanup",
+      "utils_video_processor_videoprocessor_download_video"
+    ],
+    "5": [
+      "utils_init"
+    ],
+    "6": [
+      "readme",
+      "readme_features",
+      "readme_installation",
+      "readme_project_structure",
+      "readme_reelforge_youtube_to_vertical_9_16_converter",
+      "readme_requirements",
+      "readme_usage"
+    ],
+    "7": [
+      "app",
+      "app_upload_video",
+      "flask",
+      "flask_socketio",
+      "re",
+      "threading"
+    ],
+    "8": [
+      "app_handle_connect",
+      "app_on_start_processing",
+      "app_rationale_114",
+      "on",
+      "uuid"
+    ],
+    "9": [
+      "utils_transcriber_transcriber",
+      "utils_transcriber_transcriber_get_smart_cut_points",
+      "utils_transcriber_transcriber_init",
+      "utils_video_processor_videoprocessor_init"
+    ],
+    "10": [
+      "utils_video_processor_videoprocessor",
+      "utils_video_processor_videoprocessor_check_cached_clips",
+      "utils_video_processor_videoprocessor_get_video_folder",
+      "utils_video_processor_videoprocessor_get_youtube_id"
+    ],
+    "11": [
+      "app_process_job",
+      "app_process_job_progress_cb"
+    ]
+  },
+  "cohesion": {
+    "0": 0.23636363636363636,
+    "1": 0.21212121212121213,
+    "2": 0.4,
+    "3": 0.4,
+    "4": 0.5,
+    "5": 1.0,
+    "6": 0.2857142857142857,
+    "7": 0.4,
+    "8": 0.4,
+    "9": 0.5,
+    "10": 0.6666666666666666,
+    "11": 1.0
+  },
+  "gods": [
+    {
+      "id": "utils_video_processor_videoprocessor",
+      "label": "VideoProcessor",
+      "degree": 15
+    },
+    {
+      "id": "utils_face_tracker_facetracker",
+      "label": "FaceTracker",
+      "degree": 8
+    },
+    {
+      "id": "utils_transcriber_transcriber",
+      "label": "Transcriber",
+      "degree": 7
+    },
+    {
+      "id": "app_on_start_processing",
+      "label": "on_start_processing()",
+      "degree": 6
+    },
+    {
+      "id": "readme_reelforge_youtube_to_vertical_9_16_converter",
+      "label": "ReelForge - YouTube to Vertical 9:16 Converter",
+      "degree": 6
+    },
+    {
+      "id": "app_convert",
+      "label": "convert()",
+      "degree": 4
+    },
+    {
+      "id": "app_process_job",
+      "label": "process_job()",
+      "degree": 3
+    },
+    {
+      "id": "app_upload_video",
+      "label": "upload_video()",
+      "degree": 3
+    },
+    {
+      "id": "app_download",
+      "label": "download()",
+      "degree": 2
+    },
+    {
+      "id": "app_index",
+      "label": "index()",
+      "degree": 2
+    }
+  ],
+  "surprises": [
+    {
+      "source": "VideoProcessor",
+      "target": "FaceTracker",
+      "source_files": [
+        "utils/video_processor.py",
+        "utils/face_tracker.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities"
+    },
+    {
+      "source": "VideoProcessor",
+      "target": "Transcriber",
+      "source_files": [
+        "utils/video_processor.py",
+        "utils/transcriber.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `VideoProcessor` connect `VideoProcessor` to `FaceTracker`, `video_processor.py`, `.split_by_duration`, `.cleanup`, `app.py`, `Transcriber`?",
+      "why": "High betweenness centrality (0.400) - this node is a cross-community bridge."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 2 inferred relationships involving `VideoProcessor` (e.g. with `FaceTracker` and `Transcriber`) actually correct?",
+      "why": "`VideoProcessor` has 2 INFERRED edges - model-reasoned connections that need verification."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `FaceTracker` connect `FaceTracker` to `video_processor.py`, `VideoProcessor`, `Transcriber`?",
+      "why": "High betweenness centrality (0.103) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `Transcriber` connect `Transcriber` to `video_processor.py`, `VideoProcessor`, `.split_by_duration`?",
+      "why": "High betweenness centrality (0.071) - this node is a cross-community bridge."
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "communities": {
+    "0": [
+      "utils_video_processor_rationale_125",
+      "utils_video_processor_rationale_155",
+      "utils_video_processor_rationale_172",
+      "utils_video_processor_videoprocessor",
+      "utils_video_processor_videoprocessor_build_filter",
+      "utils_video_processor_videoprocessor_convert_clip_segment",
+      "utils_video_processor_videoprocessor_escape_text",
+      "utils_video_processor_videoprocessor_init"
+    ],
+    "1": [
+      "concurrent_futures",
+      "json",
+      "os",
+      "pathlib",
+      "subprocess",
+      "utils_video_processor",
+      "uuid"
+    ],
+    "2": [
+      "app",
+      "app_convert",
+      "app_download",
+      "app_index",
+      "flask",
+      "route"
+    ],
+    "3": [
+      "utils_video_processor_rationale_16",
+      "utils_video_processor_rationale_70",
+      "utils_video_processor_videoprocessor_get_video_duration",
+      "utils_video_processor_videoprocessor_split_and_convert"
+    ],
+    "4": [
+      "utils_video_processor_rationale_180",
+      "utils_video_processor_rationale_34",
+      "utils_video_processor_videoprocessor_cleanup",
+      "utils_video_processor_videoprocessor_download_video"
+    ],
+    "5": [
+      "utils_init"
+    ]
+  },
+  "cohesion": {
+    "0": 0.32142857142857145,
+    "1": 0.2857142857142857,
+    "2": 0.4666666666666667,
+    "3": 0.5,
+    "4": 0.5,
+    "5": 1.0
+  },
+  "gods": [
+    {
+      "id": "utils_video_processor_videoprocessor",
+      "label": "VideoProcessor",
+      "degree": 10
+    },
+    {
+      "id": "app_convert",
+      "label": "convert()",
+      "degree": 2
+    },
+    {
+      "id": "app_download",
+      "label": "download()",
+      "degree": 2
+    },
+    {
+      "id": "app_index",
+      "label": "index()",
+      "degree": 2
+    },
+    {
+      "id": "utils_video_processor_rationale_125",
+      "label": "Convert a single clip segment to vertical 9:16",
+      "degree": 1
+    },
+    {
+      "id": "utils_video_processor_rationale_155",
+      "label": "Build FFmpeg filter complex for 9:16 conversion with text overlays",
+      "degree": 1
+    },
+    {
+      "id": "utils_video_processor_rationale_172",
+      "label": "Escape special characters for FFmpeg drawtext",
+      "degree": 1
+    },
+    {
+      "id": "utils_video_processor_rationale_16",
+      "label": "Get video duration in seconds using ffprobe",
+      "degree": 1
+    },
+    {
+      "id": "utils_video_processor_rationale_70",
+      "label": "Split video into multiple clips and convert each to vertical 9:16",
+      "degree": 1
+    },
+    {
+      "id": "utils_video_processor_rationale_180",
+      "label": "Remove temporary file",
+      "degree": 1
+    }
+  ],
+  "surprises": [],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `VideoProcessor` connect `VideoProcessor` to `video_processor.py`, `app.py`, `.get_video_duration`, `.cleanup`?",
+      "why": "High betweenness centrality (0.677) - this node is a cross-community bridge."
+    }
+  ]
+}

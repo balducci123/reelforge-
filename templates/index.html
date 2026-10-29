@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="it" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ReelForge - AI Vertical Clip Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        body { background: radial-gradient(ellipse at top, rgba(99,102,241,0.18) 0%, transparent 50%), radial-gradient(ellipse at bottom, rgba(168,85,247,0.18) 0%, transparent 50%), #050510; }
+        .glass { background: rgba(15,15,25,0.6); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); border: 1px solid rgba(255,255,255,0.08); }
+        .glass-card { background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%); backdrop-filter: blur(18px) saturate(180%); -webkit-backdrop-filter: blur(18px) saturate(180%); border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 8px 40px 0 rgba(0,0,0,0.45); }
+        .fade-in { animation: fadeIn 0.8s cubic-bezier(0.16,1,0.3,1); }
+        .slide-up { animation: slideUp 0.9s cubic-bezier(0.16,1,0.3,1); }
+        .scale-in { animation: scaleIn 0.6s cubic-bezier(0.16,1,0.3,1); }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes scaleIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+        .btn-glow { position: relative; overflow: hidden; transition: all 0.3s cubic-bezier(0.25,0.46,0.45,0.94); }
+        .btn-glow::before { content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent); transition: left 0.6s; }
+        .btn-glow:hover::before { left: 100%; }
+        .btn-glow:hover { transform: translateY(-2px); box-shadow: 0 25px 50px -10px rgba(99,102,241,0.7); }
+        .input-glow:focus { box-shadow: 0 0 0 2px rgba(99,102,241,0.5), 0 0 25px rgba(99,102,241,0.35); border-color: rgba(129,140,248,0.9); }
+        .range-slider-dark { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; border-radius: 9999px; background: linear-gradient(to right, #6366f1 0%, #a855f7 50%, #ec4899 100%); outline: none; }
+        .range-slider-dark::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 28px; height: 28px; border-radius: 50%; background: radial-gradient(circle, #ffffff 0%, #e0e7ff 100%); cursor: pointer; box-shadow: 0 0 0 4px rgba(99,102,241,0.35), 0 10px 20px rgba(99,102,241,0.55); border: 2px solid #6366f1; transition: all 0.2s ease; }
+        .range-slider-dark::-webkit-slider-thumb:hover { transform: scale(1.16); }
+        .clip-card-dark { transition: all 0.4s cubic-bezier(0.25,0.46,0.45,0.94); }
+        .clip-card-dark:hover { transform: translateY(-8px) scale(1.02); box-shadow: 0 35px 70px -12px rgba(99,102,241,0.45); border-color: rgba(129,140,248,0.6); }
+        .shimmer-bar { background: linear-gradient(90deg, transparent 0%, rgba(165,180,252,0.9) 50%, transparent 100%); background-size: 200% 100%; animation: shimmerMove 2s infinite; }
+        @keyframes shimmerMove { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    </style>
+</head>
+<body class="min-h-screen text-white">
+    <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+        <div class="absolute top-0 left-1/4 w-[28rem] h-[28rem] bg-indigo-600/20 rounded-full blur-[140px] animate-pulse"></div>
+        <div class="absolute bottom-0 right-1/4 w-[28rem] h-[28rem] bg-purple-600/18 rounded-full blur-[140px] animate-pulse" style="animation-delay: 1s;"></div>
+        <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[650px] h-[650px] bg-pink-600/12 rounded-full blur-[170px]"></div>
+    </div>
+
+    <div class="container mx-auto px-4 py-10 max-w-6xl relative">
+        <header class="text-center mb-12 fade-in">
+            <div class="inline-flex items-center justify-center w-24 h-24 glass-card rounded-3xl mb-6">
+                <svg class="w-12 h-12" fill="none" stroke="url(#g1)" viewBox="0 0 24 24">
+                    <defs><linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#818cf8"/><stop offset="100%" style="stop-color:#a855f7"/></linearGradient></defs>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                </svg>
+            </div>
+            <h1 class="text-5xl md:text-7xl font-black mb-4 tracking-tight"><span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">REELFORGE</span></h1>
+            <p class="text-xl md:text-2xl text-slate-300 font-light">All-in-One AI Platform • Smart Reframe • Whisper • Real-Time</p>
+            <div class="mt-5 flex flex-wrap items-center justify-center gap-2 text-sm text-slate-300">
+                <span class="px-3 py-1 glass rounded-full">9:16 Vertical</span>
+                <span class="px-3 py-1 glass rounded-full">Full Screen Smart Crop</span>
+                <span class="px-3 py-1 glass rounded-full">AI Transcription</span>
+                <span class="px-3 py-1 glass rounded-full">Live Progress</span>
+            </div>
+        </header>
+
+        <main class="slide-up">
+            <div class="glass-card rounded-[2.5rem] overflow-hidden">
+                <div class="p-8 md:p-12 space-y-8">
+                    <div class="space-y-3">
+                        <label class="flex items-center text-sm font-semibold text-slate-200"><svg class="w-5 h-5 mr-2 text-indigo-400" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg> YouTube URL <span class="text-slate-500">(oppure carica un file locale)</span></label>
+                        <input type="url" id="youtube_url" class="w-full px-6 py-4 glass text-white placeholder-slate-500 rounded-2xl input-glow focus:outline-none" placeholder="https://www.youtube.com/watch?v=...">
+                        <label class="flex items-center gap-3 w-fit px-4 py-2 glass rounded-xl cursor-pointer hover:bg-white/5 transition">
+                            <input type="file" id="local_video" accept="video/*" class="hidden">
+                            <svg class="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                            <span class="text-sm text-slate-300" id="localVideoLabel">Carica un video locale (mp4/mov)</span>
+                        </label>
+                    </div>
+
+                    <div class="grid md:grid-cols-2 gap-6">
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between"><label class="text-sm font-semibold text-slate-200">Durata per Clip</label><div class="flex items-baseline space-x-2"><span class="text-3xl font-black bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent" id="durationDisplay">30</span><span class="text-sm text-slate-400">sec</span></div></div>
+                            <input type="range" id="clip_duration" min="30" max="60" value="30" step="5" class="range-slider-dark w-full">
+                            <div class="flex justify-between text-xs text-slate-500"><span>30</span><span>35</span><span>40</span><span>45</span><span>50</span><span>55</span><span>60</span></div>
+                        </div>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between"><label class="text-sm font-semibold text-slate-200">Numero di Clip</label><div class="flex items-baseline space-x-2"><span class="text-3xl font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent" id="numClipsDisplay">3</span><span class="text-sm text-slate-400">clip</span></div></div>
+                            <input type="range" id="num_clips" min="1" max="10" value="3" step="1" class="range-slider-dark w-full">
+                            <div class="flex justify-between text-xs text-slate-500"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-4">
+                        <label class="text-sm font-semibold text-slate-200">Modalità di Ritaglio</label>
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <label class="flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition">
+                                <input type="radio" name="mode" value="bars" checked class="accent-indigo-500">
+                                <div>
+                                    <p class="font-semibold">Con Bande Nere (Classico)</p>
+                                    <p class="text-xs text-slate-400">Adatta mantenendo tutto il video con padding</p>
+                                </div>
+                            </label>
+                            <label class="flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition">
+                                <input type="radio" name="mode" value="smart_crop" class="accent-purple-500">
+                                <div>
+                                    <p class="font-semibold">Full Screen Smart Crop (9:16)</p>
+                                    <p class="text-xs text-slate-400">Face tracking + crop dinamico sul protagonista</p>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center justify-between glass rounded-2xl p-5">
+                        <div>
+                            <p class="font-semibold">Taglio Intelligente con Whisper</p>
+                            <p class="text-xs text-slate-400">Taglia in base a frasi e momenti parlati per tagli più naturali</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="use_whisper" class="sr-only peer">
+                            <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-indigo-500 peer-checked:to-purple-500"></div>
+                        </label>
+                    </div>
+
+                    <div class="grid md:grid-cols-2 gap-6">
+                        <div class="space-y-3">
+                            <label class="text-sm font-semibold text-slate-200">Testo Banda Superiore <span class="text-slate-500">(opzionale)</span></label>
+                            <input type="text" id="top_text" class="w-full px-6 py-4 glass text-white placeholder-slate-500 rounded-2xl input-glow focus:outline-none" placeholder="ES. TRENDING NOW" maxlength="80">
+                        </div>
+                        <div class="space-y-3">
+                            <label class="text-sm font-semibold text-slate-200">Testo Banda Inferiore <span class="text-slate-500">(opzionale)</span></label>
+                            <input type="text" id="bottom_text" class="w-full px-6 py-4 glass text-white placeholder-slate-500 rounded-2xl input-glow focus:outline-none" placeholder="ES. FOLLOW FOR MORE" maxlength="80">
+                        </div>
+                    </div>
+
+                    <div class="glass rounded-2xl p-6 space-y-4">
+                        <h3 class="text-sm font-semibold text-slate-200">Anteprima Parametri</h3>
+                        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+                            <div><p class="text-slate-500 mb-1">Formato</p><p class="text-white font-medium">Verticale 9:16</p></div>
+                            <div><p class="text-slate-500 mb-1">Durata Clip</p><p class="text-white font-medium"><span id="previewDuration">30</span> sec</p></div>
+                            <div><p class="text-slate-500 mb-1">Clip</p><p class="text-white font-medium"><span id="previewClips">3</span></p></div>
+                            <div><p class="text-slate-500 mb-1">Modalità</p><p class="text-white font-medium" id="previewMode">Bande Nere</p></div>
+                            <div><p class="text-slate-500 mb-1">Whisper</p><p class="text-white font-medium" id="previewWhisper">No</p></div>
+                        </div>
+                    </div>
+
+                    <button id="convertBtn" class="btn-glow w-full px-8 py-5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white font-bold text-lg rounded-2xl focus:outline-none">
+                        <span class="flex items-center justify-center"><svg class="w-6 h-6 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span id="btnText">AVVIA ELABORAZIONE INTELLIGENTE</span></span>
+                    </button>
+                </div>
+
+                <div id="loadingState" class="hidden p-8 md:p-12 border-t border-white/5">
+                    <div class="flex items-center space-x-6 mb-8">
+                        <div class="relative">
+                            <div class="w-20 h-20 border-4 border-slate-700 rounded-full"></div>
+                            <div class="w-20 h-20 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin absolute top-0 left-0"></div>
+                        </div>
+                        <div class="flex-1">
+                            <p class="text-2xl font-bold mb-2">Elaborazione in Tempo Reale</p>
+                            <p class="text-slate-400" id="progressStatus">Inizializzazione...</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-4xl font-black bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent" id="progressPercent">0%</p>
+                        </div>
+                    </div>
+                    <div class="space-y-3">
+                        <div class="h-2 glass rounded-full overflow-hidden"><div id="progressBar" class="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-500" style="width: 0%"></div></div>
+                    </div>
+                </div>
+
+                <div id="resultsState" class="hidden border-t border-white/5">
+                    <div class="p-8 md:p-12">
+                        <div class="flex flex-col md:flex-row items-start md:items-center justify-between mb-10 space-y-4 md:space-y-0">
+                            <div class="flex items-center space-x-5">
+                                <div class="w-16 h-16 bg-gradient-to-br from-green-400 to-emerald-500 rounded-2xl flex items-center justify-center shadow-lg shadow-green-500/40"><svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg></div>
+                                <div>
+                                    <h2 class="text-3xl font-bold mb-1">Generazione Completata</h2>
+                                    <p class="text-slate-400"><span id="successCount" class="text-green-400 font-semibold">0</span> clip generate • <span id="cacheStatus"></span></p>
+                                </div>
+                            </div>
+                            <button id="newGenerationBtn" class="px-6 py-3 glass text-slate-300 font-medium rounded-xl hover:bg-white/5 transition-all">Nuova Generazione</button>
+                        </div>
+                        <div id="clipsGrid" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+                    </div>
+                </div>
+
+                <div id="errorState" class="hidden p-8 md:p-12 border-t border-white/5">
+                    <div class="flex items-start space-x-5 mb-6">
+                        <div class="flex-shrink-0 w-16 h-16 bg-red-500/20 rounded-2xl flex items-center justify-center"><svg class="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg></div>
+                        <div class="flex-1"><p class="text-xl font-bold text-red-400 mb-2">Errore di Elaborazione</p><p id="errorMessage" class="text-slate-300"></p></div>
+                    </div>
+                    <button id="tryAgainBtn" class="px-6 py-3 glass text-slate-300 font-medium rounded-xl hover:bg-white/5 transition-all">Riprova</button>
+                </div>
+            </div>
+        </main>
+
+        <footer class="text-center mt-12 text-sm text-slate-500 fade-in"><p>ReelForge • Flask • FFmpeg • OpenCV • MediaPipe • Whisper • Socket.IO</p></footer>
+    </div>
+
+    <script>
+        const socket = io();
+        const convertBtn = document.getElementById('convertBtn');
+        const loadingState = document.getElementById('loadingState');
+        const resultsState = document.getElementById('resultsState');
+        const errorState = document.getElementById('errorState');
+        const errorMessage = document.getElementById('errorMessage');
+        const clipsGrid = document.getElementById('clipsGrid');
+        const successCount = document.getElementById('successCount');
+        const cacheStatus = document.getElementById('cacheStatus');
+        const newGenerationBtn = document.getElementById('newGenerationBtn');
+        const tryAgainBtn = document.getElementById('tryAgainBtn');
+        const clipDurationSlider = document.getElementById('clip_duration');
+        const durationDisplay = document.getElementById('durationDisplay');
+        const previewDuration = document.getElementById('previewDuration');
+        const numClipsSlider = document.getElementById('num_clips');
+        const numClipsDisplay = document.getElementById('numClipsDisplay');
+        const previewClips = document.getElementById('previewClips');
+        const topTextInput = document.getElementById('top_text');
+        const bottomTextInput = document.getElementById('bottom_text');
+        const previewMode = document.getElementById('previewMode');
+        const previewWhisper = document.getElementById('previewWhisper');
+        const useWhisper = document.getElementById('use_whisper');
+        const progressBar = document.getElementById('progressBar');
+        const progressPercent = document.getElementById('progressPercent');
+        const progressStatus = document.getElementById('progressStatus');
+
+        clipDurationSlider.addEventListener('input', (e) => { durationDisplay.textContent = e.target.value; previewDuration.textContent = e.target.value; });
+        numClipsSlider.addEventListener('input', (e) => { numClipsDisplay.textContent = e.target.value; previewClips.textContent = e.target.value; });
+        document.querySelectorAll('input[name="mode"]').forEach(r => r.addEventListener('change', (e) => { previewMode.textContent = e.target.value === 'smart_crop' ? 'Smart Crop' : 'Bande Nere'; }));
+        useWhisper.addEventListener('change', (e) => { previewWhisper.textContent = e.target.checked ? 'Sì' : 'No'; });
+
+        socket.on('job_progress', (data) => {
+            progressBar.style.width = data.progress + '%';
+            progressPercent.textContent = data.progress + '%';
+            progressStatus.textContent = data.status || 'In elaborazione...';
+        });
+        socket.on('job_complete', (data) => {
+            loadingState.classList.add('hidden');
+            displayResults({clips: data.clips, successful: data.clips.filter(c=>c.success).length, cached: data.cached});
+            resultsState.classList.remove('hidden');
+            resultsState.scrollIntoView({behavior:'smooth', block:'nearest'});
+            convertBtn.disabled = false;
+            convertBtn.classList.remove('opacity-50','cursor-not-allowed');
+        });
+        socket.on('job_error', (data) => {
+            loadingState.classList.add('hidden');
+            showError(data.error || 'Errore sconosciuto');
+            convertBtn.disabled = false;
+            convertBtn.classList.remove('opacity-50','cursor-not-allowed');
+        });
+
+        const localVideoInput = document.getElementById('local_video');
+        const localVideoLabel = document.getElementById('localVideoLabel');
+        let localVideoPath = null;
+        localVideoInput.addEventListener('change', (e) => {
+            const f = e.target.files[0];
+            if (f) {
+                localVideoLabel.textContent = f.name;
+                console.log('[ReelForge] File locale selezionato:', f.name);
+            } else {
+                localVideoLabel.textContent = 'Carica un video locale (mp4/mov)';
+                localVideoPath = null;
+            }
+        });
+
+        convertBtn.addEventListener('click', async () => {
+            console.log('[ReelForge] Click su "AVVIA ELABORAZIONE INTELLIGENTE"');
+            const youtubeUrl = document.getElementById('youtube_url').value;
+            const topText = document.getElementById('top_text').value;
+            const bottomText = document.getElementById('bottom_text').value;
+            const clipDuration = document.getElementById('clip_duration').value;
+            const numClips = document.getElementById('num_clips').value;
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const whisper = document.getElementById('use_whisper').checked;
+            if (!youtubeUrl && !localVideoInput.files[0]) { showError('Inserisci un link YouTube oppure carica un file video locale'); return; }
+            resultsState.classList.add('hidden');
+            errorState.classList.add('hidden');
+            loadingState.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            progressPercent.textContent = '0%';
+            progressStatus.textContent = 'Avvio elaborazione...';
+            convertBtn.disabled = true;
+            convertBtn.classList.add('opacity-50','cursor-not-allowed');
+            try {
+                let localVideoId = null;
+                if (localVideoInput.files[0]) {
+                    console.log('[ReelForge] Upload del video locale:', localVideoInput.files[0].name);
+                    const fd = new FormData();
+                    fd.append('video', localVideoInput.files[0]);
+                    const upResp = await fetch('/upload', { method:'POST', body: fd });
+                    const upData = await upResp.json();
+                    if (!upData.success) throw new Error(upData.error || 'Upload fallito');
+                    localVideoId = upData.path;
+                    console.log('[ReelForge] Upload completato, path:', localVideoId);
+                }
+                const payload = {
+                    youtube_url: youtubeUrl,
+                    local_video_path: localVideoId,
+                    top_text: topText,
+                    bottom_text: bottomText,
+                    clip_duration: parseFloat(clipDuration),
+                    num_clips: parseInt(numClips),
+                    mode,
+                    use_whisper: whisper
+                };
+                console.log('[ReelForge] Emit Socket.IO start_processing', payload);
+                socket.emit('start_processing', payload, (resp) => {
+                    console.log('[ReelForge] ACK start_processing:', resp);
+                });
+            } catch (error) {
+                console.error('[ReelForge] Errore upload/socket:', error);
+                showError('Errore durante l\'invio dei dati al server');
+                convertBtn.disabled = false;
+                convertBtn.classList.remove('opacity-50','cursor-not-allowed');
+            }
+        });
+
+        function displayResults(data) {
+            clipsGrid.innerHTML = '';
+            successCount.textContent = data.successful || data.clips.filter(c=>c.success).length;
+            cacheStatus.textContent = data.cached ? 'Recuperato dalla cache' : 'Generato ora';
+            data.clips.forEach((clip, index) => {
+                const card = document.createElement('div');
+                card.className = 'clip-card-dark scale-in glass-card rounded-2xl overflow-hidden';
+                card.style.animationDelay = index*0.08+'s';
+                if (clip.success) {
+                    card.innerHTML = `<div class="p-5"><div class="flex items-center justify-between mb-4"><div class="flex items-center space-x-3"><div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-xl flex items-center justify-center text-white font-bold">${clip.index}</div><div><p class="font-semibold">Clip ${clip.index}</p><p class="text-xs text-slate-400">${clip.duration}s • 1080 × 1920</p></div></div><div class="text-xs px-2 py-1 glass rounded-lg text-slate-300">${clip.cached?'Cache':'Nuovo'}</div></div><a href="${clip.download_url}" class="flex items-center justify-center w-full px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-medium rounded-xl">Scarica</a></div>`;
+                } else {
+                    card.innerHTML = `<div class="p-5"><div class="flex items-center space-x-3 mb-4"><div class="w-10 h-10 bg-slate-700 rounded-xl flex items-center justify-center text-slate-400">${clip.index}</div><p class="font-semibold">Clip ${clip.index}</p></div><div class="px-4 py-3 bg-red-500/10 text-red-400 text-xs rounded-xl">${clip.error}</div></div>`;
+                }
+                clipsGrid.appendChild(card);
+            });
+        }
+
+        function showError(message) {
+            loadingState.classList.add('hidden');
+            resultsState.classList.add('hidden');
+            errorState.classList.remove('hidden');
+            errorMessage.textContent = message;
+            errorState.scrollIntoView({behavior:'smooth', block:'nearest'});
+        }
+
+        newGenerationBtn.addEventListener('click', () => { resultsState.classList.add('hidden'); document.getElementById('youtube_url').focus(); window.scrollTo({top:0, behavior:'smooth'}); });
+        tryAgainBtn.addEventListener('click', () => { errorState.classList.add('hidden'); });
+    </script>
+</body>
+</html>
