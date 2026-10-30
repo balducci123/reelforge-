@@ -230,8 +230,20 @@ class VideoProcessor:
         target_folder = Path(output_folder) if output_folder else self.output_dir
         target_folder.mkdir(parents=True, exist_ok=True)
 
+        # --- Fase 0: Pre-estrai audio WAV (librosa/whisper non leggono bene mp4) ---
+        audio_wav = Path(input_path).with_name(Path(input_path).stem + '_audio.wav')
+        if not audio_wav.exists():
+            print('[VideoProcessor] Estrazione audio WAV con FFmpeg...')
+            wav_cmd = ['ffmpeg', '-y', '-i', str(input_path), '-vn', '-ar', '16000', '-ac', '1', str(audio_wav)]
+            try:
+                subprocess.run(wav_cmd, check=True, capture_output=True, timeout=300)
+                print(f'[VideoProcessor] Audio estratto: {audio_wav.name}')
+            except Exception as e:
+                print(f'[VideoProcessor] Estrazione WAV fallita, uso il sorgente: {e}')
+                audio_wav = input_path
+
         # --- Fase 1: Analisi audio ---
-        audio_analysis = self.audio_analyzer.analyze(input_path)
+        audio_analysis = self.audio_analyzer.analyze(audio_wav)
         print(f'[AudioAnalyzer] Picchi: {audio_analysis["peak_times"][:5]}... | Silenzi: {len(audio_analysis["silent_ranges"])}')
 
         # --- Fase 2: Candidati iniziali ---
@@ -240,7 +252,7 @@ class VideoProcessor:
         if use_whisper:
             try:
                 print('[VideoProcessor] Avvio trascrizione Whisper...')
-                words = self.transcriber.transcribe_words(input_path)
+                words = self.transcriber.transcribe_words(audio_wav)
                 all_words = words
                 segments = self.transcriber.get_smart_segments(
                     words, min_clip_duration=clip_duration, max_clip_duration=clip_duration
@@ -277,18 +289,34 @@ class VideoProcessor:
 
             clip_id = str(uuid.uuid4())
             output_filename = f"clip_{i+1}_{clip_id}.mp4"
-            clip_words = [w for w in all_words if start_time <= w['start'] and w['end'] <= start_time + actual_duration]
+
+            # Parole del clip convertite in tempi RELATIVI al clip
+            # (nel file FFmpeg -ss fa partire t da 0, quindi i timestamp ASS
+            #  devono partire da 0, non da start_time del video originale)
+            clip_end = start_time + actual_duration
+            clip_words = []
+            for w in all_words:
+                w_start = max(float(w['start']), start_time)
+                w_end = min(float(w['end']), clip_end)
+                if w_end - w_start < 0.05:
+                    continue
+                clip_words.append({
+                    'word': w['word'],
+                    'start': round(w_start - start_time, 2),
+                    'end': round(w_end - start_time, 2),
+                    'probability': w.get('probability', 1.0)
+                })
             clip_text = ' '.join(w['word'] for w in clip_words)
 
             # Se karaoke attivo ma nessuna parola (Whisper fallito/disattivato),
-            # genera sottotitoli temporali vuoti ogni 2 secondi
+            # genera sottotitoli temporali vuoti ogni 2 secondi (tempi relativi)
             if use_karaoke and not clip_words:
-                t = start_time
-                while t < start_time + actual_duration:
+                t = 0.0
+                while t < actual_duration:
                     clip_words.append({
                         'word': '',
                         'start': round(t, 2),
-                        'end': round(min(t + 2.0, start_time + actual_duration), 2),
+                        'end': round(min(t + 2.0, actual_duration), 2),
                         'probability': 1.0
                     })
                     t += 2.0
