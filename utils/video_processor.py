@@ -150,7 +150,7 @@ class VideoProcessor:
         return clips
 
     # ------------------------------------------------------------------ #
-    # ASS Subtitle generator (karaoke parola per parola, safe zone TikTok)
+    # ASS Subtitle generator (karaoke parola per parola)
     # ------------------------------------------------------------------ #
     def generate_ass_subtitles(self, words, output_path, style_name='Default'):
         if not words:
@@ -280,6 +280,19 @@ class VideoProcessor:
             clip_words = [w for w in all_words if start_time <= w['start'] and w['end'] <= start_time + actual_duration]
             clip_text = ' '.join(w['word'] for w in clip_words)
 
+            # Se karaoke attivo ma nessuna parola (Whisper fallito/disattivato),
+            # genera sottotitoli temporali vuoti ogni 2 secondi
+            if use_karaoke and not clip_words:
+                t = start_time
+                while t < start_time + actual_duration:
+                    clip_words.append({
+                        'word': '',
+                        'start': round(t, 2),
+                        'end': round(min(t + 2.0, start_time + actual_duration), 2),
+                        'probability': 1.0
+                    })
+                    t += 2.0
+
             raw_tasks.append({
                 'index': len(raw_tasks) + 1,
                 'start_time': round(start_time, 2),
@@ -332,7 +345,9 @@ class VideoProcessor:
                     crop_strategy=crop_strategy,
                     use_karaoke=use_karaoke,
                     words=task['words'],
-                    is_vertical=is_vid_vertical
+                    is_vertical=is_vid_vertical,
+                    clip_start=task['start_time'],
+                    clip_end=task['start_time'] + task['duration']
                 )
                 print(f'[VideoProcessor] Clip {task["index"]} completata: {output_path.name}')
                 results.append({
@@ -370,7 +385,8 @@ class VideoProcessor:
     def _convert_clip_segment_viral(self, input_path, start_time, duration, output_filename,
                                     top_text, bottom_text, target_folder=None,
                                     crop_strategy='smart_crop',
-                                    use_karaoke=False, words=None, is_vertical=False):
+                                    use_karaoke=False, words=None, is_vertical=False,
+                                    clip_start=None, clip_end=None):
         folder = Path(target_folder) if target_folder else self.output_dir
         folder.mkdir(parents=True, exist_ok=True)
         output_path = folder / output_filename
@@ -383,7 +399,10 @@ class VideoProcessor:
 
         if crop_strategy == 'smart_crop':
             try:
-                positions, vid_duration, w, h = self.smart_cropper.sample_subject_positions(input_path)
+                # CAMPIONA SOLO IL SEGMENTO DEL CLIP, non tutto il video
+                positions, vid_duration, w, h = self.smart_cropper.sample_subject_positions(
+                    input_path, start_time=start_time, end_time=(clip_end or start_time + duration)
+                )
                 crop_filter = self.smart_cropper.generate_filter(
                     positions, vid_duration, w, h, strategy='smart_crop'
                 )
@@ -394,9 +413,10 @@ class VideoProcessor:
                 video_filter_parts.append(self._build_filter(top_text, bottom_text))
 
         elif crop_strategy == 'blur_background':
-            # Usa direttamente il filtro blur_background dal smart_cropper
             try:
-                positions, vid_duration, w, h = self.smart_cropper.sample_subject_positions(input_path)
+                positions, vid_duration, w, h = self.smart_cropper.sample_subject_positions(
+                    input_path, start_time=start_time, end_time=(clip_end or start_time + duration)
+                )
                 blur_filter = self.smart_cropper.generate_filter(
                     positions, vid_duration, w, h, strategy='blur_background'
                 )
@@ -407,7 +427,6 @@ class VideoProcessor:
                 video_filter_parts.append(self._build_filter(top_text, bottom_text))
 
         else:
-            # Bande nere classico
             video_filter_parts.append(self._build_filter(top_text, bottom_text))
             print(f'[Bars] Filtro bande nere applicato')
 
