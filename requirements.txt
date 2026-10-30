@@ -11,8 +11,11 @@ numpy==1.26.4
 ffmpeg-python==0.2.0
 
 # Opzionale: trascrizione AI e sottotitoli karaoke
-# faster-whisper richiede Microsoft C++ Build Tools su Windows per compilare 'av'
-# faster-whisper==0.10.0
+# faster-whisper==1.2.1
+# IMPORTANTE: av va bloccato a 12.x — PyAV >= 14 ha rimosso l'argomento
+# 'metadata_errors' e faster-whisper smette di funzionare con
+# "TypeError: open() got an unexpected keyword argument 'metadata_errors'"
+# av==12.3.0
 
 # Vosk: riconoscimento vocale offline leggero, wheel precompilata (consigliato su Windows)
 # vosk==0.3.45
