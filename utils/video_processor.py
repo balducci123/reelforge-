@@ -156,6 +156,7 @@ class VideoProcessor:
         if not words:
             output_path.write_text(
                 '[Script Info]\nTitle: ReelForge\nScriptType: v4.00+\n'
+                'PlayResX: 1080\nPlayResY: 1920\n'
                 '[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, '
                 'OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, '
                 'Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, '
@@ -173,20 +174,22 @@ class VideoProcessor:
             start = self._format_ass_time(w['start'])
             end = self._format_ass_time(w['end'])
             word_text = w['word'].replace('{', '\\{').replace('}', '\\}')
+            # Parola attiva in giallo con bordo nero (dimensione dallo stile, niente fs override)
             events.append(
                 f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,"
-                f"{{\\c&H00E1FF&\\b1\\fs66\\3c&H000000&\\4c&H000000&\\3a&H60&\\4a&H60&}}"
+                f"{{\\1c&H00E1FF&\\b1\\3c&H000000&\\4c&H000000&\\3a&H90&\\4a&H90&}}"
                 f"{word_text}"
             )
 
         ass_content = (
             '[Script Info]\nTitle: ReelForge Karaoke\nScriptType: v4.00+\n'
+            'PlayResX: 1080\nPlayResY: 1920\nWrapStyle: 0\n'
             '[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, '
             'OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, '
             'Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, '
             'MarginV, Encoding\n'
-            'Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,'
-            '100,100,0,0,1,2,0,2,10,10,40,1\n'
+            'Style: Default,Arial,64,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,'
+            '100,100,0,0,1,4,0,2,60,60,140,1\n'
             '[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, '
             'Effect, Text\n'
             + '\n'.join(events)
