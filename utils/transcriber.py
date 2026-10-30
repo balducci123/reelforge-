@@ -1,3 +1,7 @@
+import os
+import json
+import zipfile
+import urllib.request
 from pathlib import Path
 
 try:
@@ -7,11 +11,20 @@ except Exception:
     WhisperModel = None
     FASTER_WHISPER_AVAILABLE = False
 
+try:
+    import vosk
+    VOSK_AVAILABLE = True
+except Exception:
+    vosk = None
+    VOSK_AVAILABLE = False
+
 
 class Transcriber:
     """
-    Trascrizione locale con faster-whisper (molto più veloce e leggero di openai-whisper).
-    Estrae timestamp a livello di PAROLA per sottotitoli karaoke e taglio intelligente.
+    Trascrizione locale con fallback multi-backend:
+    1. faster-whisper (più accurato, richiede build C++)
+    2. vosk (leggero, wheel precompilata, modello scaricato automaticamente)
+    3. Placeholder temporali (sempre funzionante, mostra i tempi sul video)
     """
 
     HOOK_WORDS = {
@@ -26,32 +39,87 @@ class Transcriber:
         'attention', 'crazy', 'insane', 'finally'
     }
 
-    def __init__(self, model_size="base", device="cpu", compute_type="int8"):
+    VOSK_MODELS = {
+        'it': 'https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip',
+        'en': 'https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip',
+    }
+
+    def __init__(self, model_size="base", device="cpu", compute_type="int8", lang='it'):
         self.model = None
+        self.backend = None
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
+        self.lang = lang
+        self.models_dir = Path('models') / 'vosk'
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1) Prova faster-whisper
         if FASTER_WHISPER_AVAILABLE and WhisperModel is not None:
             try:
                 self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+                self.backend = 'faster-whisper'
                 print(f'[Transcriber] faster-whisper {model_size} caricato su {device} ({compute_type})')
+                return
             except Exception as e:
-                print(f'[Transcriber] Errore caricamento modello: {e}')
-                self.model = None
-        else:
-            print('[Transcriber] faster-whisper non disponibile. Installa: pip install faster-whisper')
+                print(f'[Transcriber] faster-whisper non disponibile: {e}')
+
+        # 2) Prova Vosk
+        if VOSK_AVAILABLE and vosk is not None:
+            try:
+                model_path = self._ensure_vosk_model()
+                if model_path:
+                    self.model = vosk.Model(str(model_path))
+                    self.backend = 'vosk'
+                    print(f'[Transcriber] Vosk caricato da {model_path}')
+                    return
+            except Exception as e:
+                print(f'[Transcriber] Vosk non disponibile: {e}')
+
+        # 3) Fallback: nessun backend
+        print('[Transcriber] Nessun backend di trascrizione disponibile. '
+              'I sottotitoli saranno generati come placeholder temporali.')
+        self.backend = None
+
+    def _ensure_vosk_model(self):
+        """Scarica il modello Vosk se non presente."""
+        model_name = f'vosk-model-small-{self.lang}-0.22' if self.lang == 'it' else f'vosk-model-small-en-us-0.15'
+        model_dir = self.models_dir / model_name
+        if model_dir.exists():
+            return model_dir
+
+        zip_path = self.models_dir / f'{model_name}.zip'
+        url = self.VOSK_MODELS.get('it' if self.lang == 'it' else 'en')
+
+        print(f'[Transcriber] Download modello Vosk {model_name}...')
+        try:
+            urllib.request.urlretrieve(url, str(zip_path))
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                zf.extractall(str(self.models_dir))
+            zip_path.unlink()
+            if model_dir.exists():
+                print(f'[Transcriber] Modello Vosk installato in {model_dir}')
+                return model_dir
+        except Exception as e:
+            print(f'[Transcriber] Download modello Vosk fallito: {e}')
+        return None
 
     def transcribe_words(self, audio_path):
         """
         Ritorna lista di dizionari: {word, start, end, probability}
         """
-        if not FASTER_WHISPER_AVAILABLE or self.model is None:
-            return []
+        if self.backend == 'faster-whisper':
+            return self._transcribe_faster_whisper(audio_path)
+        if self.backend == 'vosk':
+            return self._transcribe_vosk(audio_path)
+        return self._placeholder_words(audio_path)
+
+    def _transcribe_faster_whisper(self, audio_path):
         try:
             segments, info = self.model.transcribe(
                 str(audio_path),
                 word_timestamps=True,
-                language='it',
+                language=self.lang,
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=400)
             )
@@ -65,17 +133,83 @@ class Transcriber:
                             'end': float(w.end),
                             'probability': float(getattr(w, 'probability', 0.0))
                         })
-            print(f'[Transcriber] Estratte {len(words)} parole con timestamp')
+            print(f'[Transcriber] faster-whisper: {len(words)} parole')
             return words
         except Exception as e:
-            print(f'[Transcriber] Errore trascrizione: {e}')
-            return []
+            print(f'[Transcriber] Errore faster-whisper: {e}')
+            return self._placeholder_words(audio_path)
+
+    def _transcribe_vosk(self, audio_path):
+        import wave
+        import json as _json
+        try:
+            wf = wave.open(str(audio_path), "rb")
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() not in (8000, 16000, 32000, 44100, 48000):
+                # Vosk richiede WAV mono PCM 16-bit; se non lo è, fallback
+                wf.close()
+                return self._placeholder_words(audio_path)
+
+            rec = vosk.KaldiRecognizer(self.model, wf.getframerate())
+            rec.SetWords(True)
+
+            words = []
+            while True:
+                data = wf.readframes(4000)
+                if len(data) == 0:
+                    break
+                if rec.AcceptWaveform(data):
+                    res = _json.loads(rec.Result())
+                    for w in res.get('result', []):
+                        words.append({
+                            'word': w.get('word', ''),
+                            'start': float(w.get('start', 0)),
+                            'end': float(w.get('end', 0)),
+                            'probability': float(w.get('conf', 0.0))
+                        })
+            # Ultimo risultato
+            res = _json.loads(rec.FinalResult())
+            for w in res.get('result', []):
+                words.append({
+                    'word': w.get('word', ''),
+                    'start': float(w.get('start', 0)),
+                    'end': float(w.get('end', 0)),
+                    'probability': float(w.get('conf', 0.0))
+                })
+            wf.close()
+            print(f'[Transcriber] Vosk: {len(words)} parole')
+            return words
+        except Exception as e:
+            print(f'[Transcriber] Errore Vosk: {e}')
+            return self._placeholder_words(audio_path)
+
+    def _placeholder_words(self, audio_path):
+        """Genera parole placeholder ogni 2 secondi basate sulla durata del file."""
+        from pathlib import Path as _Path
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_format', str(audio_path)],
+                capture_output=True, timeout=15
+            )
+            data = json.loads(result.stdout)
+            duration = float(data['format']['duration'])
+        except Exception:
+            duration = 60.0
+
+        words = []
+        t = 0.0
+        while t < duration:
+            words.append({
+                'word': f'[{t:.0f}s]',
+                'start': round(t, 2),
+                'end': round(min(t + 2.0, duration), 2),
+                'probability': 1.0
+            })
+            t += 2.0
+        print(f'[Transcriber] Placeholder: {len(words)} eventi temporali')
+        return words
 
     def get_smart_segments(self, words, min_clip_duration=30, max_clip_duration=60):
-        """
-        Raggruppa parole in segmenti di parlato continuo e restituisce candidati clip
-        che iniziano e finiscono su confini di frase/parola.
-        """
         if not words:
             return []
 
@@ -92,7 +226,7 @@ class Transcriber:
         if current:
             segments.append(current)
 
-        # 2) Costruisci candidati unendo segmenti adiacenti per raggiungere durata target
+        # 2) Costruisci candidati
         candidates = []
         i = 0
         while i < len(segments):
@@ -110,7 +244,6 @@ class Transcriber:
                     has_hook = True
                 j += 1
 
-            # Taglia se supera max_clip_duration (taglia all'ultimo confine di parola)
             if end - start > max_clip_duration:
                 acc = 0
                 cut_words = []
@@ -134,9 +267,7 @@ class Transcriber:
                 'has_hook': has_hook,
                 'words': [w for w in words if start <= w['start'] and w['end'] <= end]
             })
-
             i = j
 
-        # Ordina per: hook prima, poi durata
         candidates.sort(key=lambda c: (not c['has_hook'], -c['duration']))
         return candidates[:10]

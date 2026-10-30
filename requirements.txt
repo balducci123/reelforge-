@@ -11,8 +11,11 @@ numpy==1.26.4
 ffmpeg-python==0.2.0
 
 # Opzionale: trascrizione AI e sottotitoli karaoke
-# richiede Microsoft C++ Build Tools su Windows per compilare 'av'
+# faster-whisper richiede Microsoft C++ Build Tools su Windows per compilare 'av'
 # faster-whisper==0.10.0
+
+# Vosk: riconoscimento vocale offline leggero, wheel precompilata (consigliato su Windows)
+# vosk==0.3.45
 
 # Opzionale: analisi audio (picchi di energia, silenzi)
 # librosa==0.10.2
