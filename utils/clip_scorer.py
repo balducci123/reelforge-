@@ -49,8 +49,8 @@ class ClipScorer:
         # 2) Energia audio (0-25): presenza di picchi nel range del clip
         energy_score = 0
         if audio_analysis and audio_analysis.get('peak_times'):
-            clip_start = candidate['start']
-            clip_end = candidate['end']
+            clip_start = candidate.get('start', candidate.get('start_time', 0.0))
+            clip_end = candidate.get('end', clip_start + candidate.get('duration', 0.0))
             peaks_in_clip = [p for p in audio_analysis['peak_times'] if clip_start <= p <= clip_end]
             # Normalizza: fino a 5 picchi = 25 punti
             energy_score = min(25, len(peaks_in_clip) * 5)
@@ -59,8 +59,8 @@ class ClipScorer:
         # 3) Ritenzione (0-25): pochi silenzi, parlato continuo
         retention_score = 25
         if audio_analysis and audio_analysis.get('silent_ranges'):
-            clip_start = candidate['start']
-            clip_end = candidate['end']
+            clip_start = candidate.get('start', candidate.get('start_time', 0.0))
+            clip_end = candidate.get('end', clip_start + candidate.get('duration', 0.0))
             silence_in_clip = 0
             for s, e in audio_analysis['silent_ranges']:
                 overlap_start = max(s, clip_start)
