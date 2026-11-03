@@ -208,15 +208,19 @@ class ViralSmartCropper:
         # -------------------------------------------------------------- #
         ATTACH_THRESHOLD = 3.0
 
-        group_track = []     # (t, cx_media_del_gruppo, cy_media) - per il caso attaccati
-        group_widths = []    # largh. volti medio per scala di dimensione del gruppo
+        group_track = []     # (t, cx_media, cy_media, span_norm) - caso attaccati
         multi_gap_norms = [] # distanze normalizzate minime per frame con 2+ soggetti
         all_widths = []
         for t_rel, faces in rows:
             if faces:
                 cxm = sum(f['cx'] for f in faces) / len(faces)
                 cym = sum(f['cy'] for f in faces) / len(faces)
-                group_track.append((t_rel, cxm, cym))
+                # estensione orizzontale del gruppo (bounding box dei volti):
+                # serve per dimensionare la finestra che li contiene TUTTI
+                left = min(f['cx'] - f['width'] / 2 for f in faces)
+                right = max(f['cx'] + f['width'] / 2 for f in faces)
+                span = max(0.05, right - left)
+                group_track.append((t_rel, cxm, cym, span))
                 all_widths.extend(f['width'] for f in faces if f['width'] > 0)
             if len(faces) >= 2:
                 gaps = []
@@ -239,7 +243,7 @@ class ViralSmartCropper:
                 num_subjects = 1
                 merged_width = statistics.median(all_widths) if all_widths else 0.2
                 print(f'[ViralCrop] Soggetti ATTACCATI (distanza {med_gap:.1f} < {ATTACH_THRESHOLD} volti): '
-                      f'nessuno split, crop unico che centra il gruppo')
+                      f'nessuno split, un\'inquadratura unica che contiene il gruppo')
             else:
                 # SOGGETTI STACCATI: split con N riquadri = soggetti contemporanei
                 num_subjects = max(2, min(self.MAX_SUBJECTS, int(statistics.mode(multi_frames))))
@@ -288,14 +292,14 @@ class ViralSmartCropper:
         smoothed = []
         n = len(positions)
         half = self.smooth_window // 2
+        n_fields = min(len(p) for p in positions)
         for i in range(n):
             start = max(0, i - half)
             end = min(n, i + half + 1)
             window = positions[start:end]
-            avg_t = sum(p[0] for p in window) / len(window)
-            avg_cx = sum(p[1] for p in window) / len(window)
-            avg_cy = sum(p[2] for p in window) / len(window)
-            smoothed.append((avg_t, avg_cx, avg_cy))
+            # media di ogni campo (t, cx, cy, [span, ...])
+            avg = [sum(p[k] for p in window) / len(window) for k in range(n_fields)]
+            smoothed.append(tuple(avg))
         return smoothed
 
     def _step_expr(self, values, fallback=0):
@@ -358,6 +362,11 @@ class ViralSmartCropper:
         target_w = self.target_w
         target_h = self.target_h
 
+        # Caso "soggetti ATTACCATI": la traccia contiene l'estensione del
+        # gruppo (t, cx, cy, span) -> finestra unica che li contiene tutti
+        if positions and any(len(p) >= 4 for p in positions):
+            return self._generate_group_filter(positions, video_w, video_h)
+
         crop_w = int(video_h * self.target_aspect)
         if crop_w > video_w:
             crop_w = video_w
@@ -407,6 +416,52 @@ class ViralSmartCropper:
 
         filter_str = f"crop={crop_w}:{crop_h}:'{expr}':0,scale={target_w}:{target_h}"
         print(f'[ViralCrop] Filtro dinamico: {filter_str}')
+        return filter_str
+
+    def _generate_group_filter(self, positions, video_w, video_h):
+        """
+        Caso soggetti ATTACCATI: UN'unica inquadratura che contiene TUTTI i
+        soggetti. La finestra di crop viene dimensionata sul bounding box
+        del gruppo (span massima + margini), segue il gruppo in x e y, e
+        l'output e' riempito con sfondo sfocato quando l'aspect della
+        finestra non puo' essere 9:16 (gruppi larghi non ci stanno in un
+        frame verticale): cosi' NON si taglia mai ameta' un soggetto.
+        """
+        target_w, target_h = self.target_w, self.target_h
+        margin_factor = 0.2  # span * 1.20: aria moderata ai lati del gruppo
+
+        positions = sorted(positions, key=lambda p: p[0])
+        positions = self._smooth_positions(positions)
+
+        span_px = max(p[3] for p in positions) * video_w
+        min_w = min(video_w, int(video_h * self.target_aspect))
+        crop_w = int(min(video_w, max(span_px * (1 + margin_factor), min_w)))
+        crop_h = min(video_h, int(round(crop_w * target_h / target_w)))
+        max_x = max(0, video_w - crop_w)
+        max_y = max(0, video_h - crop_h)
+
+        xs, ys = [], []
+        for t, cx, cy, _span in positions:
+            x = max(0, min(int(cx * video_w - crop_w / 2), max_x))
+            y = max(0, min(int(cy * video_h - 0.38 * crop_h), max_y))
+            xs.append((t, x))
+            ys.append((t, y))
+        x_expr = self._step_expr(xs, fallback=max_x // 2)
+        y_expr = self._step_expr(ys, fallback=max_y // 2)
+
+        print(f'[ViralCrop] Inquadratura di GRUPPO: finestra {crop_w}x{crop_h} '
+              f'su {video_w}x{video_h} (segue il gruppo, sfondo sfocato dove '
+              f'la finestra non copre tutto il 9:16)')
+
+        filter_str = (
+            f"[0:v]crop={crop_w}:{crop_h}:'{x_expr}':'{y_expr}'[gwin];"
+            f"[gwin]split=2[gblur][gfg];"
+            f"[gblur]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+            f"crop={target_w}:{target_h},boxblur=25:5[bg];"
+            f"[gfg]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease[fg];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2,scale={target_w}:{target_h}"
+        )
+        print(f'[ViralCrop] Filtro gruppo: {filter_str[:180]}...')
         return filter_str
 
     # ------------------------------------------------------------------ #
