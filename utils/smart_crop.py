@@ -1,3 +1,5 @@
+import statistics
+
 import cv2
 import numpy as np
 from pathlib import Path
@@ -21,7 +23,15 @@ class ViralSmartCropper:
     Smart crop ottimizzato per TikTok / Instagram Reels.
     Campiona il SOLO segmento da elaborare (start_time -> end_time)
     così il crop segue davvero il soggetto dentro la clip.
+
+    Supporto multi-soggetto:
+    - 1 soggetto  -> crop dinamico che lo segue (come prima)
+    - 2 soggetti  -> schermo diviso in due riquadri impilati
+    - 3 soggetti  -> due riquadri piccoli sopra + il soggetto principale grande sotto
+    - 4 soggetti  -> griglia 2x2
     """
+
+    MAX_SUBJECTS = 4
 
     def __init__(self, target_w=1080, target_h=1920, num_samples=10, headroom=0.20, smooth_window=3):
         self.target_w = target_w
@@ -47,28 +57,33 @@ class ViralSmartCropper:
                 except Exception:
                     self.yolo = None
 
-    def _detect_subject(self, frame):
+    # ------------------------------------------------------------------ #
+    # Detection
+    # ------------------------------------------------------------------ #
+    def _detect_all_subjects(self, frame):
+        """
+        Rileva TUTTI i soggetti nel frame.
+        Ritorna lista di dict {cx, cy, width} normalizzati, ordinata da sinistra a destra.
+        """
         h, w = frame.shape[:2]
+        faces = []
 
         if self.yolo is not None:
             try:
                 results = self.yolo(frame, verbose=False)
-                best_area = 0
-                best_cx, best_cy = 0.5, 0.5
                 for r in results:
                     if r.boxes is None:
                         continue
                     for box in r.boxes:
-                        cls = int(box.cls[0])
-                        if cls == 0:
+                        if int(box.cls[0]) == 0:  # persona
                             x1, y1, x2, y2 = box.xyxy[0].tolist()
-                            area = (x2 - x1) * (y2 - y1)
-                            if area > best_area:
-                                best_area = area
-                                best_cx = (x1 + x2) / 2 / w
-                                best_cy = (y1 + y2) / 2 / h
-                if best_area > 0:
-                    return best_cx, best_cy
+                            faces.append({
+                                'cx': (x1 + x2) / 2 / w,
+                                'cy': (y1 + y2) / 2 / h,
+                                'width': (x2 - x1) / w
+                            })
+                if faces:
+                    return sorted(faces, key=lambda f: f['cx'])
             except Exception:
                 pass
 
@@ -77,26 +92,30 @@ class ViralSmartCropper:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 res = self.face_detector.process(rgb)
                 if res.detections:
-                    best = max(
-                        res.detections,
-                        key=lambda d: d.location_data.relative_bounding_box.width
-                                      * d.location_data.relative_bounding_box.height
-                    )
-                    bbox = best.location_data.relative_bounding_box
-                    cx = bbox.xmin + bbox.width / 2
-                    cy = bbox.ymin + bbox.height / 2
-                    return cx, cy
+                    for d in res.detections:
+                        bb = d.location_data.relative_bounding_box
+                        faces.append({
+                            'cx': bb.xmin + bb.width / 2,
+                            'cy': bb.ymin + bb.height / 2,
+                            'width': bb.width
+                        })
             except Exception:
                 pass
 
-        return 0.5, 0.5
+        return sorted(faces, key=lambda f: f['cx'])
 
+    def _detect_subject(self, frame):
+        """Rileva il soggetto principale (retro-compatibile)."""
+        faces = self._detect_all_subjects(frame)
+        if not faces:
+            return 0.5, 0.5
+        best = max(faces, key=lambda f: f['width'])
+        return best['cx'], best['cy']
+
+    # ------------------------------------------------------------------ #
+    # Campionamento singolo soggetto (Crop dinamico classico)
+    # ------------------------------------------------------------------ #
     def sample_subject_positions(self, video_path, start_time=0.0, end_time=None):
-        """
-        Campiona frame distribuiti uniformemente SOLO nel range [start_time, end_time].
-        Ritorna lista di (tempo_relativo_al_clip, cx_normalizzato, cy_normalizzato),
-        durata_del_clip, larghezza, altezza.
-        """
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             return [], 0.0, 0, 0
@@ -106,7 +125,7 @@ class ViralSmartCropper:
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         if end_time is None or end_time <= start_time:
-            end_time = start_time + 30  # default 30s
+            end_time = start_time + 30
 
         clip_duration = end_time - start_time
         print(f'[ViralCrop] Campionamento segmento {start_time:.2f}s -> {end_time:.2f}s '
@@ -131,6 +150,96 @@ class ViralSmartCropper:
         cap.release()
         return positions, clip_duration, width, height
 
+    # ------------------------------------------------------------------ #
+    # Campionamento MULTI-SOGGETTO (tracking Nearest-Neighbor simultaneo)
+    # ------------------------------------------------------------------ #
+    def sample_subjects(self, video_path, start_time=0.0, end_time=None):
+        """
+        Campiona il segmento e tiene traccia di OGNI soggetto nel tempo.
+        Ritorna (num_subjects, tracks, avg_widths, clip_duration, video_w, video_h)
+        - tracks: {idx_soggetto: [(t_rel, cx_norm, cy_norm), ...]}
+        - avg_widths: {idx_soggetto: larghezza_mediana_normalizzata}
+        """
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            return 1, {0: [(0.0, 0.5, 0.5)]}, {0: 0.2}, 0.0, 0, 0
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        if end_time is None or end_time <= start_time:
+            end_time = start_time + 30
+
+        clip_duration = end_time - start_time
+        print(f'[ViralCrop] Campionamento multi-soggetto {start_time:.2f}s -> {end_time:.2f}s '
+              f'(durata {clip_duration:.2f}s) su {width}x{height}')
+
+        if self.num_samples <= 1:
+            times = [0.0]
+        else:
+            times = [clip_duration * i / (self.num_samples - 1) for i in range(self.num_samples)]
+
+        rows = []  # (t_rel, faces)
+        for t_rel in times:
+            t_abs = start_time + t_rel
+            cap.set(cv2.CAP_PROP_POS_MSEC, t_abs * 1000)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+            faces = self._detect_all_subjects(frame)
+            rows.append((t_rel, faces))
+            print(f'[ViralCrop] t_rel={t_rel:.2f}s rilevati={len(faces)} '
+                  + ' '.join(f"cx={f['cx']:.2f}" for f in faces))
+        cap.release()
+
+        counts = [len(f) for _, f in rows]
+        if not rows or max(counts) == 0:
+            print('[ViralCrop] Nessun soggetto rilevato: crop statico centrato')
+            return 1, {0: [(0.0, 0.5, 0.5)]}, {0: 0.2}, clip_duration, width, height
+
+        frames_any = [c for c in counts if c > 0]
+        multi_frames = [c for c in counts if c >= 2]
+        max_multi = max(counts)
+
+        # Trigger multi-soggetto: i frame con 2+ soggetti devono essere
+        # almeno il 25% dei campioni in cui c'e' almeno un soggetto
+        # (ignora apparizioni sporche singole)
+        if frames_any and len(multi_frames) >= max(1, int(round(0.25 * len(frames_any)))):
+            num_subjects = max(1, min(self.MAX_SUBJECTS, max_multi))
+            print(f'[ViralCrop] MULTI-SOGGETTO: traccio {num_subjects} soggetti '
+                  f'({len(multi_frames)}/{len(frames_any)} campioni con 2+ soggetti)')
+        else:
+            num_subjects = 1
+            print(f'[ViralCrop] Un solo soggetto dominante '
+                  f'({len(multi_frames)}/{len(frames_any)} campioni con 2+ soggetti, sotto soglia)')
+
+        # --- Tracking per soggetto: matching greedy al volto più vicino ---
+        tracks = {i: [] for i in range(num_subjects)}
+        widths = {i: [] for i in range(num_subjects)}
+        last_pos = {i: (0.5, 0.5) for i in range(num_subjects)}
+
+        for t_rel, faces in rows:
+            avail = list(faces)
+            for i in range(num_subjects):
+                if avail:
+                    # volto più vicino all'ultima posizione nota del soggetto i
+                    k = min(range(len(avail)), key=lambda j: abs(avail[j]['cx'] - last_pos[i][0]))
+                    f = avail.pop(k)
+                    tracks[i].append((t_rel, f['cx'], f['cy']))
+                    widths[i].append(f['width'])
+                    last_pos[i] = (f['cx'], f['cy'])
+                else:
+                    tracks[i].append((t_rel, last_pos[i][0], last_pos[i][1]))
+                    widths[i].append(0.0)
+
+        avg_widths = {i: statistics.median([wd for wd in widths[i] if wd > 0]) if any(w > 0 for w in widths[i]) else 0.1
+                      for i in range(num_subjects)}
+        return num_subjects, tracks, avg_widths, clip_duration, width, height
+
+    # ------------------------------------------------------------------ #
+    # Smoothing
+    # ------------------------------------------------------------------ #
     def _smooth_positions(self, positions):
         if len(positions) <= self.smooth_window:
             return positions
@@ -147,6 +256,36 @@ class ViralSmartCropper:
             smoothed.append((avg_t, avg_cx, avg_cy))
         return smoothed
 
+    def _stepped_expr(self, points, crop_w, video_w):
+        """
+        Converte track [(t_rel, cx_norm, cy_norm)] in espressione FFmpeg x(t)
+        a gradini (o x statica se un solo punto).
+        """
+        max_x = max(0, video_w - crop_w)
+        pix = []
+        for t, cx_norm, _cy in points:
+            x_center = cx_norm * video_w
+            x_px = int(x_center - crop_w / 2)
+            x_px = max(0, min(x_px, max_x))
+            pix.append((t, x_px))
+        pix.sort(key=lambda p: p[0])
+
+        if len(pix) <= 1 or (len(pix) == 2 and pix[0][1] == pix[1][1]):
+            x = pix[0][1] if pix else 0
+            return str(x)
+
+        parts = []
+        n = len(pix)
+        for i, (t, x) in enumerate(pix):
+            if i == n - 1:
+                parts.append(str(x))
+            else:
+                parts.append(f"if(lte(t,{t:.3f}),{x},")
+        return "".join(parts) + ")" * (n - 1)
+
+    # ------------------------------------------------------------------ #
+    # Filtro crop dinamico SINGOLO soggetto (come prima)
+    # ------------------------------------------------------------------ #
     def generate_filter(self, positions, duration, video_w, video_h, strategy='smart_crop'):
         target_w = self.target_w
         target_h = self.target_h
@@ -201,3 +340,102 @@ class ViralSmartCropper:
         filter_str = f"crop={crop_w}:{crop_h}:'{expr}':0,scale={target_w}:{target_h}"
         print(f'[ViralCrop] Filtro dinamico: {filter_str}')
         return filter_str
+
+    # ------------------------------------------------------------------ #
+    # Filtro Split Screen multi-soggetto (grafo filter_complex)
+    # ------------------------------------------------------------------ #
+    def generate_split_filter(self, num_subjects, tracks, avg_widths, video_w, video_h, ass_path=None):
+        """
+        Costruisce un grafo -filter_complex che divide lo schermo in riquadri,
+        uno per soggetto, ciascuno con crop dinamico che segue il soggetto.
+
+        Layout:
+        - 2 soggetti: due riquadri grandi (1080x960) impilati verticalmente
+        - 3 soggetti: due piccoli (540x960) sopra + il principale grande (1080x960) sotto
+        - 4 soggetti: griglia 2x2 di riquadri 540x960
+        """
+        if num_subjects <= 1:
+            labels = list(tracks.keys())
+            positions = tracks[labels[0]]
+            return None  # caller usa generate_filter
+
+        # Ordina per dimensione: il soggetto più grande/principale per ultima (grande / riga bassa)
+        order = sorted(range(num_subjects),
+                       key=lambda i: -avg_widths.get(i, 0.1))
+        print(f'[ViralSplit] layout={num_subjects} soggetti, ordine per dimensione: {order}')
+
+        # Finestre di crop:
+        # - riquadro grande 1080x960  -> crop 1215x1080 (aspect 1.125)
+        # - riquadro piccolo 540x960  -> crop 607x1080  (aspect 0.5625)
+        big_crop_w = min(video_w, int(round(video_h * 1080 / 960)))
+        small_crop_w = min(video_w, int(round(video_h * 540 / 960)))
+
+        chains = []
+        tiles = []  # (label_t, tile_w, tile_h, row, col)
+
+        if num_subjects == 2:
+            # due riquadri grandi impilati: il più grande sotto
+            subj_top, subj_bottom = order[1], order[0]
+            for idx, subj in enumerate([subj_top, subj_bottom]):
+                expr = self._stepped_expr(self._smooth_positions(tracks[subj]), big_crop_w, video_w)
+                chains.append(
+                    f"[0:v]crop={big_crop_w}:{video_h}:'{expr}':0,scale=1080:960[t{idx}];"
+                )
+                tiles.append((f't{idx}', 1080, 960))
+            print(f'[ViralSplit] 2 soggetti: riquadro grande sopra {subj_top}, '
+                  f'riquadro grande (principale) sotto {subj_bottom}')
+        elif num_subjects == 3:
+            # il principale grande in basso, gli altri due piccoli sopra (ordine sx->dx)
+            subj_main = order[0]
+            others = sorted(order[1:], key=lambda i: tracks[i][0][1])
+            for k, subj in enumerate(others):
+                expr = self._stepped_expr(self._smooth_positions(tracks[subj]), small_crop_w, video_w)
+                chains.append(
+                    f"[0:v]crop={small_crop_w}:{video_h}:'{expr}':0,scale=540:960[tk{subj}];"
+                )
+            expr_main = self._stepped_expr(self._smooth_positions(tracks[subj_main]), big_crop_w, video_w)
+            chains.append(
+                f"[0:v]crop={big_crop_w}:{video_h}:'{expr_main}':0,scale=1080:960[tm];"
+            )
+            print(f'[ViralSplit] 3 soggetti: piccoli sopra {others}, principale grande sotto {subj_main}')
+        else:
+            # 4 (o più, troncati): griglia 2x2; riga bassa con i 2 principali
+            chosen = order[:4]
+            # riga bassa: order[0] sinistra, order[1] destra; riga alta: [2] [3]
+            grid = [[chosen[2], chosen[3]], [chosen[0], chosen[1]]]
+            for r, row in enumerate(grid):
+                # dentro ogni riga ordina da sx a dx per posizione
+                row_sorted = sorted(row, key=lambda i: tracks[i][0][1])
+                for c, subj in enumerate(row_sorted):
+                    expr = self._stepped_expr(self._smooth_positions(tracks[subj]), small_crop_w, video_w)
+                    chains.append(
+                        f"[0:v]crop={small_crop_w}:{video_h}:'{expr}':0,scale=540:960[ts{subj}];"
+                    )
+            print(f'[ViralSplit] 4 soggetti: griglia 2x2, riga alta {grid[0]}, riga bassa {grid[1]}')
+
+        # --- Composizione (hstack/vstack) ---
+        tile_streams = {}  # soggetto -> label stream
+        if num_subjects == 2:
+            compose = "[t0][t1]vstack"
+        elif num_subjects == 3:
+            tl, tr = [f"tk{s}" for s in others]
+            compose = f"[{tl}][{tr}]hstack[top];[top][tm]vstack"
+        else:
+            chosen = order[:4]
+            # top row sorted left-to-right, bottom row idem
+            top = sorted([chosen[2], chosen[3]], key=lambda i: tracks[i][0][1])
+            bottom = sorted([chosen[0], chosen[1]], key=lambda i: tracks[i][0][1])
+            compose = (f"[ts{top[0]}][ts{top[1]}]hstack[top];"
+                       f"[ts{bottom[0]}][ts{bottom[1]}]hstack[bot];"
+                       f"[top][bot]vstack")
+
+        graph = "".join(chains) + compose + "[vout]"
+
+        if ass_path:
+            ass_str = str(ass_path).replace('\\', '/')
+            graph += f";[vout]ass='{ass_str}'[vass]"
+            print(f'[ViralSplit] Sottotitoli karaoke operati sul composite: {ass_str}')
+
+        first_print = graph[:160]
+        print(f'[ViralSplit] Inizio filter_complex: {first_print}...')
+        return graph
