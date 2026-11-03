@@ -256,10 +256,48 @@ class ViralSmartCropper:
             smoothed.append((avg_t, avg_cx, avg_cy))
         return smoothed
 
+    def _step_expr(self, values, fallback=0):
+        """
+        Converte lista ordinata [(t, val)] in espressione FFmpeg a gradini.
+        Liste piatte (tutti uguali o singolo punto) -> costante.
+        """
+        if not values:
+            return str(fallback)
+        vals = [v for _, v in values]
+        if len(vals) == 1 or all(abs(v - vals[0]) < 1e-6 for v in vals):
+            return str(vals[0])
+        parts = []
+        n = len(values)
+        for i, (t, v) in enumerate(values):
+            if i == n - 1:
+                parts.append(str(v))
+            else:
+                parts.append(f"if(lte(t,{t:.3f}),{v},")
+        return "".join(parts) + ")" * (n - 1)
+
+    def _window_expr(self, points, crop_w, crop_h, video_w, video_h, anchor_y=0.38):
+        """
+        Conversione track -> espressioni x(t) e y(t) finestra di crop zoomata.
+        anchor_y: porzione della finestra sopra il centro del volto (headroom).
+        """
+        max_x = max(0, video_w - crop_w)
+        max_y = max(0, video_h - crop_h)
+
+        xs, ys = [], []
+        for t, cx_norm, cy_norm in points:
+            x = int(cx_norm * video_w - crop_w / 2)
+            y = int(cy_norm * video_h - anchor_y * crop_h)
+            xs.append((t, max(0, min(x, max_x))))
+            ys.append((t, max(0, min(y, max_y))))
+        xs.sort(key=lambda p: p[0])
+        ys.sort(key=lambda p: p[0])
+
+        return self._step_expr(xs, fallback=max_x // 2), self._step_expr(ys, fallback=max_y // 2)
+
     def _stepped_expr(self, points, crop_w, video_w):
         """
         Converte track [(t_rel, cx_norm, cy_norm)] in espressione FFmpeg x(t)
-        a gradini (o x statica se un solo punto).
+        a gradini (o x statica se un solo punto). Full-height: y=0.
         """
         max_x = max(0, video_w - crop_w)
         pix = []
@@ -269,19 +307,7 @@ class ViralSmartCropper:
             x_px = max(0, min(x_px, max_x))
             pix.append((t, x_px))
         pix.sort(key=lambda p: p[0])
-
-        if len(pix) <= 1 or (len(pix) == 2 and pix[0][1] == pix[1][1]):
-            x = pix[0][1] if pix else 0
-            return str(x)
-
-        parts = []
-        n = len(pix)
-        for i, (t, x) in enumerate(pix):
-            if i == n - 1:
-                parts.append(str(x))
-            else:
-                parts.append(f"if(lte(t,{t:.3f}),{x},")
-        return "".join(parts) + ")" * (n - 1)
+        return self._step_expr(pix, fallback=max_x // 2)
 
     # ------------------------------------------------------------------ #
     # Filtro crop dinamico SINGOLO soggetto (come prima)
@@ -347,7 +373,11 @@ class ViralSmartCropper:
     def generate_split_filter(self, num_subjects, tracks, avg_widths, video_w, video_h, ass_path=None):
         """
         Costruisce un grafo -filter_complex che divide lo schermo in riquadri,
-        uno per soggetto, ciascuno con crop dinamico che segue il soggetto.
+        uno per soggetto, ciascuno con crop dinamico ZOOMATO che segue il
+        soggetto in orizzontale E in verticale. La finestra di crop copre solo
+        ~75% dell'altezza del source, quindi ogni riquadro mostra UN soggetto
+        (prima la finestra era larga quanto quasi tutto il frame e le tile
+        ripetevano gli stessi soggetti).
 
         Layout:
         - 2 soggetti: due riquadri grandi (1080x960) impilati verticalmente
@@ -364,78 +394,58 @@ class ViralSmartCropper:
                        key=lambda i: -avg_widths.get(i, 0.1))
         print(f'[ViralSplit] layout={num_subjects} soggetti, ordine per dimensione: {order}')
 
-        # Finestre di crop:
-        # - riquadro grande 1080x960  -> crop 1215x1080 (aspect 1.125)
-        # - riquadro piccolo 540x960  -> crop 607x1080  (aspect 0.5625)
-        big_crop_w = min(video_w, int(round(video_h * 1080 / 960)))
-        small_crop_w = min(video_w, int(round(video_h * 540 / 960)))
+        # Finestre di crop ZOOMATE (75% dell'altezza sorgente),
+        # stesso aspect del riquadro di destinazione
+        zoom_h = min(video_h - 2, int(round(video_h * 0.75)))
+        big_crop_w = min(video_w, int(round(zoom_h * 1080 / 960)))   # ~911 su 1080p
+        small_crop_w = min(video_w, int(round(zoom_h * 540 / 960)))  # ~456 su 1080p
+
+        def _chain(subj, crop_w, scale_w, scale_h, label):
+            pts = self._smooth_positions(tracks[subj])
+            x_expr, y_expr = self._window_expr(pts, crop_w, zoom_h, video_w, video_h)
+            return (
+                f"[0:v]crop={crop_w}:{zoom_h}:'{x_expr}':'{y_expr}',"
+                f"scale={scale_w}:{scale_h}[{label}];"
+            )
 
         chains = []
-        tiles = []  # (label_t, tile_w, tile_h, row, col)
 
         if num_subjects == 2:
             # due riquadri grandi impilati: il più grande sotto
             subj_top, subj_bottom = order[1], order[0]
-            for idx, subj in enumerate([subj_top, subj_bottom]):
-                expr = self._stepped_expr(self._smooth_positions(tracks[subj]), big_crop_w, video_w)
-                chains.append(
-                    f"[0:v]crop={big_crop_w}:{video_h}:'{expr}':0,scale=1080:960[t{idx}];"
-                )
-                tiles.append((f't{idx}', 1080, 960))
+            chains.append(_chain(subj_top, big_crop_w, 1080, 960, 't0'))
+            chains.append(_chain(subj_bottom, big_crop_w, 1080, 960, 't1'))
+            compose = "[t0][t1]vstack"
             print(f'[ViralSplit] 2 soggetti: riquadro grande sopra {subj_top}, '
                   f'riquadro grande (principale) sotto {subj_bottom}')
         elif num_subjects == 3:
             # il principale grande in basso, gli altri due piccoli sopra (ordine sx->dx)
             subj_main = order[0]
             others = sorted(order[1:], key=lambda i: tracks[i][0][1])
-            for k, subj in enumerate(others):
-                expr = self._stepped_expr(self._smooth_positions(tracks[subj]), small_crop_w, video_w)
-                chains.append(
-                    f"[0:v]crop={small_crop_w}:{video_h}:'{expr}':0,scale=540:960[tk{subj}];"
-                )
-            expr_main = self._stepped_expr(self._smooth_positions(tracks[subj_main]), big_crop_w, video_w)
-            chains.append(
-                f"[0:v]crop={big_crop_w}:{video_h}:'{expr_main}':0,scale=1080:960[tm];"
-            )
+            chains.append(_chain(others[0], small_crop_w, 540, 960, f'tk{others[0]}'))
+            chains.append(_chain(others[1], small_crop_w, 540, 960, f'tk{others[1]}'))
+            chains.append(_chain(subj_main, big_crop_w, 1080, 960, 'tm'))
+            compose = f"[tk{others[0]}][tk{others[1]}]hstack[top];[top][tm]vstack"
             print(f'[ViralSplit] 3 soggetti: piccoli sopra {others}, principale grande sotto {subj_main}')
         else:
             # 4 (o più, troncati): griglia 2x2; riga bassa con i 2 principali
             chosen = order[:4]
-            # riga bassa: order[0] sinistra, order[1] destra; riga alta: [2] [3]
-            grid = [[chosen[2], chosen[3]], [chosen[0], chosen[1]]]
-            for r, row in enumerate(grid):
-                # dentro ogni riga ordina da sx a dx per posizione
-                row_sorted = sorted(row, key=lambda i: tracks[i][0][1])
-                for c, subj in enumerate(row_sorted):
-                    expr = self._stepped_expr(self._smooth_positions(tracks[subj]), small_crop_w, video_w)
-                    chains.append(
-                        f"[0:v]crop={small_crop_w}:{video_h}:'{expr}':0,scale=540:960[ts{subj}];"
-                    )
-            print(f'[ViralSplit] 4 soggetti: griglia 2x2, riga alta {grid[0]}, riga bassa {grid[1]}')
-
-        # --- Composizione (hstack/vstack) ---
-        tile_streams = {}  # soggetto -> label stream
-        if num_subjects == 2:
-            compose = "[t0][t1]vstack"
-        elif num_subjects == 3:
-            tl, tr = [f"tk{s}" for s in others]
-            compose = f"[{tl}][{tr}]hstack[top];[top][tm]vstack"
-        else:
-            chosen = order[:4]
-            # top row sorted left-to-right, bottom row idem
+            # riga bassa: i 2 principali; dentro ogni riga ordina da sx a dx
             top = sorted([chosen[2], chosen[3]], key=lambda i: tracks[i][0][1])
             bottom = sorted([chosen[0], chosen[1]], key=lambda i: tracks[i][0][1])
+            for subj in chosen:
+                chains.append(_chain(subj, small_crop_w, 540, 960, f'ts{subj}'))
             compose = (f"[ts{top[0]}][ts{top[1]}]hstack[top];"
                        f"[ts{bottom[0]}][ts{bottom[1]}]hstack[bot];"
                        f"[top][bot]vstack")
+            print(f'[ViralSplit] 4 soggetti: griglia 2x2, riga alta {top}, riga bassa {bottom}')
 
         graph = "".join(chains) + compose + "[vout]"
 
         if ass_path:
             ass_str = str(ass_path).replace('\\', '/')
             graph += f";[vout]ass='{ass_str}'[vass]"
-            print(f'[ViralSplit] Sottotitoli karaoke operati sul composite: {ass_str}')
+            print(f'[ViralSplit] Sottotitoli karaoke sul composite: {ass_str}')
 
-        first_print = graph[:160]
-        print(f'[ViralSplit] Inizio filter_complex: {first_print}...')
+        print(f'[ViralSplit] Inizio filter_complex: {graph[:160]}...')
         return graph
