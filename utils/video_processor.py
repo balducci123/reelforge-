@@ -425,47 +425,20 @@ class VideoProcessor:
         print(f'[FFmpeg] Clip: start={start_time}s dur={duration}s output={output_path.name} '
               f'crop={crop_strategy} karaoke={use_karaoke} vertical_input={is_vertical}')
 
-        # --- Sottotitoli karaoke (ASS) generati PRIMA dei filtri,
-        #     così il split screen multi-soggetto può incrostarli nel grafo ---
-        ass_path = None
-        ass_already_in_graph = False
-        if use_karaoke and words:
-            ass_filename = output_path.stem + '.ass'
-            ass_path = folder / ass_filename
-            self.generate_ass_subtitles(words, ass_path)
-            print(f'[Subtitles] Generato ASS: {ass_path.name}')
-
         # --- Filtro video ---
         video_filter_parts = []
-        split_graph = None  # grafo filter_complex per multi-soggetto
 
         if crop_strategy == 'smart_crop':
             try:
                 # CAMPIONA SOLO IL SEGMENTO DEL CLIP, non tutto il video
-                num_subjects, tracks, avg_widths, vid_duration, w, h = self.smart_cropper.sample_subjects(
+                positions, vid_duration, w, h = self.smart_cropper.sample_subject_positions(
                     input_path, start_time=start_time, end_time=(clip_end or start_time + duration)
                 )
-                if num_subjects >= 2:
-                    print(f'[SmartCrop] {num_subjects} soggetti rilevati -> SPLIT SCREEN')
-                    split_graph = self.smart_cropper.generate_split_filter(
-                        num_subjects, tracks, avg_widths, w, h, ass_path=ass_path
-                    )
-                    if split_graph and ass_path:
-                        ass_already_in_graph = True
-                    if split_graph:
-                        print(f'[SmartCrop] Split filter pronto')
-                    else:
-                        # traccia singola non valida: fallback crop classico
-                        print('[SmartCrop] Split non valido, uso crop dinamico singolo')
-                if not split_graph:
-                    # prendi la traccia del soggetto principale (più grande)
-                    main_track = max(tracks.keys(), key=lambda i: avg_widths.get(i, 0))
-                    positions = tracks[main_track]
-                    crop_filter = self.smart_cropper.generate_filter(
-                        positions, vid_duration, w, h, strategy='smart_crop'
-                    )
-                    video_filter_parts.append(crop_filter)
-                    print(f'[SmartCrop] Filtro applicato: {crop_filter}')
+                crop_filter = self.smart_cropper.generate_filter(
+                    positions, vid_duration, w, h, strategy='smart_crop'
+                )
+                video_filter_parts.append(crop_filter)
+                print(f'[SmartCrop] Filtro applicato: {crop_filter}')
             except Exception as e:
                 print(f'[SmartCrop] Errore, fallback a bande nere: {e}')
                 video_filter_parts.append(self._build_filter(top_text, bottom_text))
@@ -488,64 +461,42 @@ class VideoProcessor:
             video_filter_parts.append(self._build_filter(top_text, bottom_text))
             print(f'[Bars] Filtro bande nere applicato')
 
-        # --- Sottotitoli karaoke (ASS) per la modalità normale ---
-        if ass_path and not ass_already_in_graph and not split_graph:
+        # --- Sottotitoli karaoke (ASS) ---
+        ass_path = None
+        if use_karaoke and words:
+            ass_filename = output_path.stem + '.ass'
+            ass_path = folder / ass_filename
+            self.generate_ass_subtitles(words, ass_path)
             ass_path_str = str(ass_path).replace('\\', '/')
             video_filter_parts.append(f"ass='{ass_path_str}'")
             print(f'[Subtitles] Aggiunto overlay ASS: {ass_path_str}')
 
+        filter_complex = ','.join(video_filter_parts)
+        print(f'[FFmpeg] Filter completo: {filter_complex}')
+
         # --- Filtro audio: normalizzazione loudnorm ---
         audio_filter = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
-        if split_graph:
-            # Modalità split screen: grafo filter_complex complesso
-            filter_complex = split_graph
-            print(f'[FFmpeg] Filter_complex (split): {filter_complex[:200]}...')
-            cmd = [
-                'ffmpeg',
-                '-ss', str(float(start_time)),
-                '-i', str(input_path),
-                '-t', str(float(duration)),
-                '-filter_complex', filter_complex,
-                '-map', '[vout]' if not ass_already_in_graph else '[vass]',
-                '-map', '0:a?',
-                '-af', audio_filter,
-                '-threads', '2',
-                '-c:v', 'libx264',
-                '-preset', 'ultrafast',
-                '-crf', '20',
-                '-c:a', 'aac',
-                '-b:a', '128k',
-                '-ar', '44100',
-                '-ac', '2',
-                '-movflags', '+faststart',
-                '-avoid_negative_ts', 'make_zero',
-                '-y',
-                str(output_path)
-            ]
-        else:
-            filter_complex = ','.join(video_filter_parts)
-            print(f'[FFmpeg] Filter completo: {filter_complex}')
-            cmd = [
-                'ffmpeg',
-                '-ss', str(float(start_time)),
-                '-i', str(input_path),
-                '-t', str(float(duration)),
-                '-vf', filter_complex,
-                '-af', audio_filter,
-                '-threads', '2',
-                '-c:v', 'libx264',
-                '-preset', 'ultrafast',
-                '-crf', '20',
-                '-c:a', 'aac',
-                '-b:a', '128k',
-                '-ar', '44100',
-                '-ac', '2',
-                '-movflags', '+faststart',
-                '-avoid_negative_ts', 'make_zero',
-                '-y',
-                str(output_path)
-            ]
+        cmd = [
+            'ffmpeg',
+            '-ss', str(float(start_time)),
+            '-i', str(input_path),
+            '-t', str(float(duration)),
+            '-vf', filter_complex,
+            '-af', audio_filter,
+            '-threads', '2',
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-crf', '20',
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            '-ar', '44100',
+            '-ac', '2',
+            '-movflags', '+faststart',
+            '-avoid_negative_ts', 'make_zero',
+            '-y',
+            str(output_path)
+        ]
 
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=600)
