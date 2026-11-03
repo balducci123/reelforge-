@@ -32,6 +32,10 @@ class ViralSmartCropper:
     """
 
     MAX_SUBJECTS = 4
+    # Sotto questa copertura verticale dell'unica inquadratura di gruppo
+    # (frame residual fill <= 55%), e' meglio lo SPLIT: bandone' sfocate in
+    # quarti del frame sono peggio dei riquadri impilati zoomati
+    GROUP_COVER_MIN = 0.55
 
     def __init__(self, target_w=1080, target_h=1920, num_samples=10, headroom=0.20, smooth_window=3):
         self.target_w = target_w
@@ -289,12 +293,30 @@ class ViralSmartCropper:
         if frames_any and len(multi_frames) >= max(1, int(round(0.25 * len(frames_any)))):
             med_gap = statistics.median(multi_gap_norms) if multi_gap_norms else 999.0
             if med_gap < ATTACH_THRESHOLD:
-                # Soggetti TROPPO ATTACCATI: nessuno split, un UNICO crop
-                # dinamico centrato sul gruppo (media delle posizioni)
+                # Soggetti TROPPO ATTACCATI: normalmente nessuno split, un
+                # UNICO crop dinamico che contiene il gruppo. MA se il gruppo
+                # e' troppo largo per stare in 9:16 (l'unica inquadratura
+                # coprirebbe meno del 55% del raccordo verticale, il resto
+                # sarebbe sfocato), lo split impilato con zoom su ogni
+                # soggetto rende decisamente meglio.
                 num_subjects = 1
                 merged_width = statistics.median(all_widths) if all_widths else 0.2
-                print(f'[ViralCrop] Soggetti ATTACCATI (distanza {med_gap:.1f} < {ATTACH_THRESHOLD} volti): '
-                      f'nessuno split, un\'inquadratura unica che contiene il gruppo')
+                span_px = max(p[3] for p in group_track) * width
+                crop_w_guess = min(width, max(span_px * 1.2, 1))
+                crop_h_guess = min(height, crop_w_guess * self.target_h / self.target_w)
+                cov_h = min((crop_h_guess * self.target_w)
+                            / (crop_w_guess * self.target_h), 1.0)
+                if cov_h < self.GROUP_COVER_MIN:
+                    num_subjects = max(2, min(self.MAX_SUBJECTS,
+                                              int(statistics.mode(multi_frames))))
+                    print(f'[ViralCrop] Soggetti ATTACCATI (distanza {med_gap:.1f}) '
+                          f'ma gruppo TROPPO largo: un\'inquadratura coprirebbe '
+                          f'solo il {cov_h * 100:.0f}% del verticale -> '
+                          f'SPLIT impilato con {num_subjects} riquadri')
+                else:
+                    print(f'[ViralCrop] Soggetti ATTACCATI (distanza {med_gap:.1f} < '
+                          f'{ATTACH_THRESHOLD} volti, copertura {cov_h * 100:.0f}%): '
+                          f'nessuno split, un\'inquadratura unica che contiene il gruppo')
             else:
                 # SOGGETTI STACCATI: split con N riquadri = soggetti contemporanei
                 num_subjects = max(2, min(self.MAX_SUBJECTS, int(statistics.mode(multi_frames))))
@@ -332,9 +354,11 @@ class ViralSmartCropper:
                 print(f'[ViralCrop] Soggetti sporadici scartati, '
                       f'restano {num_subjects} soggetti stabili')
 
-            # PROTEZIONE ANTI-DOPPIO: se due tracce stanno sempre quasi
-            # sovrapposte (< 1.5 larghezze di volto) sono la STESSA persona
-            # tracciata due volte -> un'unica inquadratura del gruppo
+            # PROTEZIONE ANTI-DOPPIO: se due tracce sono PRATICAMENTE
+            # sovrapposte (< 0.6 larghezze di volto) e' la STESSA persona
+            # tracciata due volte -> un'unica inquadratura del gruppo.
+            # Soglia bassa perche' con il matching globale 1 volto = 1
+            # soggetto la duplicazione e' gia' impossibile: restiamo prudenziali
             if num_subjects >= 2:
                 med_w = statistics.median(
                     [wd for ws in widths.values() for wd in ws if wd > 0]
@@ -348,9 +372,9 @@ class ViralSmartCropper:
                         ]
                         if gaps:
                             overlaps.append(statistics.median(gaps))
-                if overlaps and statistics.median(overlaps) < 1.5:
-                    print(f'[ViralCrop] PROTEZIONE: tracce sovrapposte '
-                          f'(dist. {statistics.median(overlaps):.1f} < 1.5 volti) '
+                if overlaps and statistics.median(overlaps) < 0.6:
+                    print(f'[ViralCrop] PROTEZIONE: tracce quasi coincidenti '
+                          f'(dist. {statistics.median(overlaps):.1f} < 0.6 volti) '
                           f'-> nessuno split, un\'inquadratura del gruppo')
                     num_subjects = 1
                     tracks = {0: group_track}
