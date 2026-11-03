@@ -195,45 +195,85 @@ class ViralSmartCropper:
 
         counts = [len(f) for _, f in rows]
         if not rows or max(counts) == 0:
-            print('[ViralCrop] Nessun soggetto rilevato: crop statico centrato')
+            print('[ViralCrop] Nessun soggetto rilevato: crop statico centrato, nessuno split')
             return 1, {0: [(0.0, 0.5, 0.5)]}, {0: 0.2}, clip_duration, width, height
 
         frames_any = [c for c in counts if c > 0]
         multi_frames = [c for c in counts if c >= 2]
 
+        # -------------------------------------------------------------- #
+        # MISURA DELLA DISTANZA TRA SOGGETTI                              #
+        # Distanza tra volti adiacenti normalizzata in "larghezze di volto" #
+        # (< 3.0 => attaccati, stessa inquadratura; >= 3.0 => staccati)    #
+        # -------------------------------------------------------------- #
+        ATTACH_THRESHOLD = 3.0
+
+        group_track = []     # (t, cx_media_del_gruppo, cy_media) - per il caso attaccati
+        group_widths = []    # largh. volti medio per scala di dimensione del gruppo
+        multi_gap_norms = [] # distanze normalizzate minime per frame con 2+ soggetti
+        all_widths = []
+        for t_rel, faces in rows:
+            if faces:
+                cxm = sum(f['cx'] for f in faces) / len(faces)
+                cym = sum(f['cy'] for f in faces) / len(faces)
+                group_track.append((t_rel, cxm, cym))
+                all_widths.extend(f['width'] for f in faces if f['width'] > 0)
+            if len(faces) >= 2:
+                gaps = []
+                for i in range(len(faces) - 1):
+                    avg_w = (faces[i]['width'] + faces[i + 1]['width']) / 2
+                    if avg_w > 0:
+                        gaps.append((faces[i + 1]['cx'] - faces[i]['cx']) / avg_w)
+                if gaps:
+                    multi_gap_norms.append(min(gaps))
+
         # Trigger multi-soggetto: i frame con 2+ soggetti devono essere
         # almeno il 25% dei campioni in cui c'e' almeno un soggetto
         # (ignora apparizioni sporche singole)
+        num_subjects = 1
         if frames_any and len(multi_frames) >= max(1, int(round(0.25 * len(frames_any)))):
-            # Numero di riquadri = soggetti CONTEMPORANEI nella scena (moda dei
-            # conteggi dei frame con 2+ persone), cosi' 2 soggetti -> 2 riquadri,
-            # 3 -> 3, 4 -> 4; apparizioni sporche non cambiano il layout
-            num_subjects = max(2, min(self.MAX_SUBJECTS, int(statistics.mode(multi_frames))))
-            print(f'[ViralCrop] MULTI-SOGGETTO: {num_subjects} riquadri '
-                  f'({len(multi_frames)}/{len(frames_any)} campioni con 2+ soggetti)')
+            med_gap = statistics.median(multi_gap_norms) if multi_gap_norms else 999.0
+            if med_gap < ATTACH_THRESHOLD:
+                # Soggetti TROPPO ATTACCATI: nessuno split, un UNICO crop
+                # dinamico centrato sul gruppo (media delle posizioni)
+                num_subjects = 1
+                merged_width = statistics.median(all_widths) if all_widths else 0.2
+                print(f'[ViralCrop] Soggetti ATTACCATI (distanza {med_gap:.1f} < {ATTACH_THRESHOLD} volti): '
+                      f'nessuno split, crop unico che centra il gruppo')
+            else:
+                # SOGGETTI STACCATI: split con N riquadri = soggetti contemporanei
+                num_subjects = max(2, min(self.MAX_SUBJECTS, int(statistics.mode(multi_frames))))
+                print(f'[ViralCrop] MULTI-SOGGETTO STACCATI (distanza {med_gap:.1f} >= {ATTACH_THRESHOLD} volti): '
+                      f'{num_subjects} riquadri '
+                      f'({len(multi_frames)}/{len(frames_any)} campioni con 2+ soggetti)')
         else:
             num_subjects = 1
             print(f'[ViralCrop] Un solo soggetto dominante '
-                  f'({len(multi_frames)}/{len(frames_any)} campioni con 2+ soggetti, sotto soglia)')
+                  f'({len(multi_frames)}/{len(frames_any)} campioni con 2+ soggetti, sotto soglia): nessuno split')
 
         # --- Tracking per soggetto: matching greedy al volto più vicino ---
-        tracks = {i: [] for i in range(num_subjects)}
-        widths = {i: [] for i in range(num_subjects)}
-        last_pos = {i: (0.5, 0.5) for i in range(num_subjects)}
+        if num_subjects == 1 and group_track:
+            # Caso attaccati: una sola traccia = centro del gruppo
+            tracks = {0: group_track}
+            widths = {0: all_widths or [0.2]}
+        else:
+            tracks = {i: [] for i in range(num_subjects)}
+            widths = {i: [] for i in range(num_subjects)}
+            last_pos = {i: (0.5, 0.5) for i in range(num_subjects)}
 
-        for t_rel, faces in rows:
-            avail = list(faces)
-            for i in range(num_subjects):
-                if avail:
-                    # volto più vicino all'ultima posizione nota del soggetto i
-                    k = min(range(len(avail)), key=lambda j: abs(avail[j]['cx'] - last_pos[i][0]))
-                    f = avail.pop(k)
-                    tracks[i].append((t_rel, f['cx'], f['cy']))
-                    widths[i].append(f['width'])
-                    last_pos[i] = (f['cx'], f['cy'])
-                else:
-                    tracks[i].append((t_rel, last_pos[i][0], last_pos[i][1]))
-                    widths[i].append(0.0)
+            for t_rel, faces in rows:
+                avail = list(faces)
+                for i in range(num_subjects):
+                    if avail:
+                        # volto più vicino all'ultima posizione nota del soggetto i
+                        k = min(range(len(avail)), key=lambda j: abs(avail[j]['cx'] - last_pos[i][0]))
+                        f = avail.pop(k)
+                        tracks[i].append((t_rel, f['cx'], f['cy']))
+                        widths[i].append(f['width'])
+                        last_pos[i] = (f['cx'], f['cy'])
+                    else:
+                        tracks[i].append((t_rel, last_pos[i][0], last_pos[i][1]))
+                        widths[i].append(0.0)
 
         avg_widths = {i: statistics.median([wd for wd in widths[i] if wd > 0]) if any(w > 0 for w in widths[i]) else 0.1
                       for i in range(num_subjects)}
