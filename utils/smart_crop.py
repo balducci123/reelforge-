@@ -153,6 +153,57 @@ class ViralSmartCropper:
     # ------------------------------------------------------------------ #
     # Campionamento MULTI-SOGGETTO (tracking Nearest-Neighbor simultaneo)
     # ------------------------------------------------------------------ #
+    def _dedup_faces(self, faces):
+        """
+        Elimina le DOPPIE rilevazioni dello stesso volto: se due box hanno i
+        centri a meno del 60% della media larghezze e'sono lo stesso volto,
+        tengo il piu' grande. Senza questo un doppio rilevamento inventa un
+        "secondo soggetto" e attiva uno split sbagliato.
+        """
+        result = []
+        for f in sorted(faces, key=lambda x: -x['width']):
+            if all(abs(f['cx'] - g['cx']) > 0.6 * (f['width'] + g['width']) / 2
+                   for g in result):
+                result.append(f)
+        return result
+
+    def _assign_tracks(self, rows, n, seeds=None):
+        """
+        Matching GLOBALO volti <-> soggetti: per ogni frame ogni volto va a
+        UN solo soggetto (il piu' vicino alla sua ultima posizione nota).
+        Prima il matching era sequenziale e con un solo volto nel frame le
+        due tracce lo prendevano ENTRAMBE -> stessa persona nei due riquadri.
+        Ritorna (tracks, widths, hits) dove hits[k] = campioni con volto
+        reale assegnato al soggetto k.
+        """
+        tracks = {i: [] for i in range(n)}
+        widths = {i: [] for i in range(n)}
+        hits = [0] * n
+        last_pos = [tuple(s) if s else (0.5, 0.5) for s in (seeds or [()] * n)]
+
+        for t_rel, faces in rows:
+            pairs = sorted(
+                (abs(f['cx'] - last_pos[i][0]), i, j)
+                for i in range(n) for j, f in enumerate(faces)
+            )
+            used_t, used_f = set(), set()
+            for _, i, j in pairs:
+                if i in used_t or j in used_f:
+                    continue
+                f = faces[j]
+                tracks[i].append((t_rel, f['cx'], f['cy']))
+                widths[i].append(f['width'])
+                hits[i] += 1
+                last_pos[i] = (f['cx'], f['cy'])
+                used_t.add(i)
+                used_f.add(j)
+            for i in range(n):
+                if i not in used_t:
+                    # nessun volto libero per questo soggetto: tiene la posizione
+                    tracks[i].append((t_rel, last_pos[i][0], last_pos[i][1]))
+                    widths[i].append(0.0)
+        return tracks, widths, hits
+
     def sample_subjects(self, video_path, start_time=0.0, end_time=None):
         """
         Campiona il segmento e tiene traccia di OGNI soggetto nel tempo.
@@ -187,7 +238,7 @@ class ViralSmartCropper:
             ret, frame = cap.read()
             if not ret or frame is None:
                 continue
-            faces = self._detect_all_subjects(frame)
+            faces = self._dedup_faces(self._detect_all_subjects(frame))
             rows.append((t_rel, faces))
             print(f'[ViralCrop] t_rel={t_rel:.2f}s rilevati={len(faces)} '
                   + ' '.join(f"cx={f['cx']:.2f}" for f in faces))
@@ -255,29 +306,55 @@ class ViralSmartCropper:
             print(f'[ViralCrop] Un solo soggetto dominante '
                   f'({len(multi_frames)}/{len(frames_any)} campioni con 2+ soggetti, sotto soglia): nessuno split')
 
-        # --- Tracking per soggetto: matching greedy al volto più vicino ---
+        # --- Tracking per soggetto: matching globale 1 volto = 1 soggetto ---
         if num_subjects == 1 and group_track:
-            # Caso attaccati: una sola traccia = centro del gruppo
+            # Caso attaccati: una sola traccia = finestra del gruppo
             tracks = {0: group_track}
             widths = {0: all_widths or [0.2]}
         else:
-            tracks = {i: [] for i in range(num_subjects)}
-            widths = {i: [] for i in range(num_subjects)}
-            last_pos = {i: (0.5, 0.5) for i in range(num_subjects)}
+            tracks, widths, hits = self._assign_tracks(rows, num_subjects)
+            n_rows = len(rows)
 
-            for t_rel, faces in rows:
-                avail = list(faces)
-                for i in range(num_subjects):
-                    if avail:
-                        # volto più vicino all'ultima posizione nota del soggetto i
-                        k = min(range(len(avail)), key=lambda j: abs(avail[j]['cx'] - last_pos[i][0]))
-                        f = avail.pop(k)
-                        tracks[i].append((t_rel, f['cx'], f['cy']))
-                        widths[i].append(f['width'])
-                        last_pos[i] = (f['cx'], f['cy'])
-                    else:
-                        tracks[i].append((t_rel, last_pos[i][0], last_pos[i][1]))
-                        widths[i].append(0.0)
+            # Soggetti SPORADICI: se una traccia riceve un volto reale in
+            # meno del 30% dei campioni, non e' un soggetto stabile della
+            # scena -> lo scarto e riceco solo i soggetti stabili
+            stable = [i for i in range(num_subjects)
+                      if hits[i] >= max(2, 0.3 * n_rows)]
+            if 0 < len(stable) < num_subjects:
+                seeds = []
+                for i in stable:
+                    pts = tracks[i]
+                    cxm = statistics.median([p[1] for p in pts])
+                    cym = statistics.median([p[2] for p in pts])
+                    seeds.append((cxm, cym))
+                num_subjects = len(stable)
+                tracks, widths, hits = self._assign_tracks(rows, num_subjects, seeds)
+                print(f'[ViralCrop] Soggetti sporadici scartati, '
+                      f'restano {num_subjects} soggetti stabili')
+
+            # PROTEZIONE ANTI-DOPPIO: se due tracce stanno sempre quasi
+            # sovrapposte (< 1.5 larghezze di volto) sono la STESSA persona
+            # tracciata due volte -> un'unica inquadratura del gruppo
+            if num_subjects >= 2:
+                med_w = statistics.median(
+                    [wd for ws in widths.values() for wd in ws if wd > 0]
+                ) or 0.2
+                overlaps = []
+                for a in range(num_subjects):
+                    for b in range(a + 1, num_subjects):
+                        gaps = [
+                            abs(tracks[a][r][1] - tracks[b][r][1]) / med_w
+                            for r in range(n_rows)
+                        ]
+                        if gaps:
+                            overlaps.append(statistics.median(gaps))
+                if overlaps and statistics.median(overlaps) < 1.5:
+                    print(f'[ViralCrop] PROTEZIONE: tracce sovrapposte '
+                          f'(dist. {statistics.median(overlaps):.1f} < 1.5 volti) '
+                          f'-> nessuno split, un\'inquadratura del gruppo')
+                    num_subjects = 1
+                    tracks = {0: group_track}
+                    widths = {0: all_widths or [0.2]}
 
         avg_widths = {i: statistics.median([wd for wd in widths[i] if wd > 0]) if any(w > 0 for w in widths[i]) else 0.1
                       for i in range(num_subjects)}
