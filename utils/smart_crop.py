@@ -200,14 +200,16 @@ class ViralSmartCropper:
 
         frames_any = [c for c in counts if c > 0]
         multi_frames = [c for c in counts if c >= 2]
-        max_multi = max(counts)
 
         # Trigger multi-soggetto: i frame con 2+ soggetti devono essere
         # almeno il 25% dei campioni in cui c'e' almeno un soggetto
         # (ignora apparizioni sporche singole)
         if frames_any and len(multi_frames) >= max(1, int(round(0.25 * len(frames_any)))):
-            num_subjects = max(1, min(self.MAX_SUBJECTS, max_multi))
-            print(f'[ViralCrop] MULTI-SOGGETTO: traccio {num_subjects} soggetti '
+            # Numero di riquadri = soggetti CONTEMPORANEI nella scena (moda dei
+            # conteggi dei frame con 2+ persone), cosi' 2 soggetti -> 2 riquadri,
+            # 3 -> 3, 4 -> 4; apparizioni sporche non cambiano il layout
+            num_subjects = max(2, min(self.MAX_SUBJECTS, int(statistics.mode(multi_frames))))
+            print(f'[ViralCrop] MULTI-SOGGETTO: {num_subjects} riquadri '
                   f'({len(multi_frames)}/{len(frames_any)} campioni con 2+ soggetti)')
         else:
             num_subjects = 1
