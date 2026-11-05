@@ -222,7 +222,15 @@ class TikTokPublisher:
         size = path.stat().st_size
         if size <= 0:
             return {'ok': False, 'error': 'File video vuoto'}
-        total_chunks = max(1, -(-size // CHUNK_SIZE))
+
+        # Piano chunk: TikTok valida che i byte realmente inviati coincidano
+        # con chunk_size dichiarato (tolto l'ultimo pezzo). Se il file entra
+        # in un chunk singolo (<= 64MB) dichiarare la dimensione esatta del file.
+        if size <= CHUNK_SIZE:
+            chunk_size, total_chunks = size, 1
+        else:  #.Multi-chunk: chunk uguali (ultimo resto), dimensione dichiarata = quella effettiva
+            total_chunks = max(1, -(-size // CHUNK_SIZE))
+            chunk_size = -(-size // total_chunks)  # ceil: pezz uguali, ultimo resto
 
         # 1) init
         cb(2, 'inizializzazione')
@@ -234,7 +242,7 @@ class TikTokPublisher:
             'source_info': {
                 'source': 'FILE_UPLOAD',
                 'video_size': size,
-                'chunk_size': CHUNK_SIZE,
+                'chunk_size': chunk_size,
                 'total_chunk_count': total_chunks,
             },
         }
@@ -261,7 +269,7 @@ class TikTokPublisher:
         sent = 0
         with open(path, 'rb') as f:
             for i in range(total_chunks):
-                chunk = f.read(CHUNK_SIZE)
+                chunk = f.read(chunk_size)
                 end = sent + len(chunk) - 1
                 headers = {
                     **auth,
