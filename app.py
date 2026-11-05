@@ -4,6 +4,7 @@ from flask import Flask, render_template, request, jsonify, send_file, redirect
 from utils.video_processor import VideoProcessor
 from utils.tiktok_publisher import TikTokPublisher
 from utils.tiktok_caption import generate_caption
+from utils.dev_https import ensure_local_cert
 from pathlib import Path
 from threading import Thread
 from flask_socketio import SocketIO, emit
@@ -335,4 +336,7 @@ def tiktok_caption_api():
 
 # ------------------------------------------------------------------ #
 if __name__ == '__main__':
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    ssl_ctx = ensure_local_cert()
+    # HTTPS (implicito se il certificato e' pronto): il portale TikTok
+    # accetta solo Redirect URI https:// -> https://localhost:5000/tiktok/callback
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000, ssl_context=ssl_ctx)

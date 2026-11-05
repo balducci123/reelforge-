@@ -79,7 +79,7 @@ class TikTokPublisher:
             cfg['client_secret'] = client_secret.strip()
         if redirect_uri:
             cfg['redirect_uri'] = redirect_uri.strip()
-        cfg.setdefault('redirect_uri', 'http://localhost:5000/tiktok/callback')
+        cfg.setdefault('redirect_uri', 'https://localhost:5000/tiktok/callback')
         _save_json(CONFIG_FILE, cfg)
         return cfg
 
@@ -89,7 +89,7 @@ class TikTokPublisher:
         return {
             'configured': self.configured(),
             'client_key': (key[:4] + '••••' + key[-3:]) if len(key) > 7 else (key if key else ''),
-            'redirect_uri': cfg.get('redirect_uri', 'http://localhost:5000/tiktok/callback'),
+            'redirect_uri': cfg.get('redirect_uri', 'https://localhost:5000/tiktok/callback'),
         }
 
     # ------------------------------------------------------------------ #
@@ -141,7 +141,7 @@ class TikTokPublisher:
             'client_key': cfg['client_key'],
             'scope': SCOPE,
             'response_type': 'code',
-            'redirect_uri': cfg.get('redirect_uri', 'http://localhost:5000/tiktok/callback'),
+            'redirect_uri': cfg.get('redirect_uri', 'https://localhost:5000/tiktok/callback'),
             'state': state,
             'code_challenge': challenge,
             'code_challenge_method': 'S256',
