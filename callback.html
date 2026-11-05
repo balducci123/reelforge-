@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ReelForge — Completing TikTok connection…</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0b0b12; color: #e7e9ee; margin: 0; display: grid; place-items: center; min-height: 100vh; }
+  .card { max-width: 560px; padding: 48px; text-align: center; line-height: 1.6; }
+  h1 { letter-spacing: -.02em; }
+  .btn { display: inline-block; margin-top: 18px; padding: 12px 26px; border-radius: 12px; background: linear-gradient(90deg,#6366f1,#a855f7); color: #fff; text-decoration: none; font-weight: 600; }
+  p { color: #9aa0aa; }
+  code { background: rgba(255,255,255,.08); padding: 2px 6px; border-radius: 6px; }
+  .warn { color: #fbbf24; }
+</style>
+</head>
+<body>
+<div class="card" id="msg"><h1>Completing the TikTok connection…</h1><p>Redirecting you back to ReelForge running on this computer.</p></div>
+<script>
+(function () {
+  var q = new URLSearchParams(window.location.search);
+  var msg = document.getElementById('msg');
+  if (q.get('code')) {
+    // inoltra il codice OAuth all'app locale (https://localhost:5000)
+    var target = 'https://localhost:5000/tiktok/callback?' + new URLSearchParams({
+      code: q.get('code'), state: q.get('state') || ''
+    }).toString();
+    msg.innerHTML = '<h1>Almost done ✍️</h1>' +
+      '<p>You will now be redirected to <b>ReelForge</b> running on <code>https://localhost:5000</code>.</p>' +
+      '<p class="warn">Your browser may show a certificate warning (the app uses a local self-signed certificate): ' +
+      'click <b>Advanced&nbsp;›&nbsp;Proceed to localhost</b>.</p>' +
+      '<a class="btn" id="auto">Complete the connection →</a>';
+    var a = document.getElementById('auto');
+    a.href = target;
+    // auto-redirect in 1s
+    setTimeout(function () { window.location.href = target; }, 1000);
+  } else if (q.get('error') || q.get('error_code') || q.get('error_description')) {
+    msg.innerHTML = '<h1>Authorization declined / interrupted</h1><p>' +
+      (q.get('error_description') || q.get('error') || 'Unknown error') +
+      '</p><p>Return to ReelForge and try "Collega TikTok" again.</p>';
+  } else {
+    msg.innerHTML = '<h1>ReelForge</h1>' +
+      '<p>This page is the TikTok Login Kit redirect endpoint of ReelForge, a desktop video tool that runs locally.</p>' +
+      '<p>Start ReelForge on your machine (<code>https://localhost:5000</code>) and click "Collega TikTok" from there.</p>' +
+      '<p><a href="/reelforge-/privacy.html">Privacy Policy</a> · <a href="/reelforge-/tos.html">Terms of Service</a></p>';
+  }
+})();
+</script>
+</body>
+</html>
