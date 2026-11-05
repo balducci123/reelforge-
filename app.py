@@ -299,8 +299,8 @@ def tiktok_status():
         try:
             st.update(tiktok.get_user_info())
         except Exception as e:
-            st['connected'] = False
-            st['error'] = f'Token scaduto/non valido: {e}'
+            st['display_name'] = 'TikTok'
+            st['note'] = f'Display name non disponibile: {e}'
     return jsonify(st)
 
 @app.route('/api/tiktok/disconnect', methods=['POST'])
