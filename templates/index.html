@@ -8,41 +8,92 @@
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
     <style>
-        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        /* ── Design tokens ─────────────────────────────────────── */
+        :root {
+            /* Primitive */
+            --indigo-400: #818cf8; --indigo-500: #6366f1;
+            --purple-400: #c084fc; --purple-500: #a855f7;
+            --pink-400: #f472b6;   --pink-500: #ec4899;
+            /* Semantiche */
+            --accent: var(--indigo-500);
+            --accent-2: var(--purple-500);
+            --accent-3: var(--pink-500);
+            --brand-gradient: linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent-3));
+            --border-hi: rgba(129,140,248,.6);
+            --glow: rgba(99,102,241,.45);
+            /* Motion tokens */
+            --ease-in-out: cubic-bezier(.4,0,.2,1);
+            --ease-out-quad: cubic-bezier(.25,.46,.45,.94);  /* hover, interrompibile */
+            --ease-out-expo: cubic-bezier(.16,1,.3,1);       /* entrate, decelera */
+            --ease-spring: cubic-bezier(.34,1.56,.64,1);     /* overshoot tattile */
+            --dur-fast: 150ms;
+            --dur-med: 250ms;
+            --dur-slow: 450ms;
+        }
+
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        input, button, textarea, select { font-family: inherit; }
         body { background: radial-gradient(ellipse at top, rgba(99,102,241,0.18) 0%, transparent 50%), radial-gradient(ellipse at bottom, rgba(168,85,247,0.18) 0%, transparent 50%), #050510; }
         .glass { background: rgba(15,15,25,0.6); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); border: 1px solid rgba(255,255,255,0.08); }
         .glass-card { background: linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%); backdrop-filter: blur(18px) saturate(180%); -webkit-backdrop-filter: blur(18px) saturate(180%); border: 1px solid rgba(255,255,255,0.12); box-shadow: 0 8px 40px 0 rgba(0,0,0,0.45); }
-        .fade-in { animation: fadeIn 0.8s cubic-bezier(0.16,1,0.3,1); }
-        .slide-up { animation: slideUp 0.9s cubic-bezier(0.16,1,0.3,1); }
-        .scale-in { animation: scaleIn 0.6s cubic-bezier(0.16,1,0.3,1); }
+
+        /* ── Entrate: transform + opacity, sotto i 600ms ──
+           (niente fill 'both': l'animazione finita rilascia la transform,
+            altrimenti blocca gli hover; 'backwards' copre solo lo stagger) */
+        .fade-in { animation: fadeIn .55s var(--ease-out-expo); }
+        .slide-up { animation: slideUp .6s var(--ease-out-expo); }
+        .scale-in { animation: scaleIn .45s var(--ease-out-expo) backwards; }
+        .state-enter { animation: stateIn .45s var(--ease-out-expo) both; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes slideUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes scaleIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
-        .btn-glow { position: relative; overflow: hidden; transition: all 0.3s cubic-bezier(0.25,0.46,0.45,0.94); }
-        .btn-glow::before { content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent); transition: left 0.6s; }
-        .btn-glow:hover::before { left: 100%; }
-        .btn-glow:hover { transform: translateY(-2px); box-shadow: 0 25px 50px -10px rgba(99,102,241,0.7); }
+        @keyframes stateIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+
+        /* ── CTA: sheen con transform (mai left), glow via filter        ──
+           (composite-only, niente repaint di box-shadow per frame)       */
+        .btn-glow { position: relative; overflow: hidden; isolation: isolate; transform: translateY(0); filter: drop-shadow(0 0 0 rgba(99,102,241,0)); transition: transform var(--dur-med) var(--ease-out-quad), filter var(--dur-med) var(--ease-out-quad); }
+        .btn-glow::before { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent); transform: translateX(-100%); transition: transform .6s var(--ease-out-quad); }
+        .btn-glow:hover::before { transform: translateX(100%); }
+        .btn-glow:hover { transform: translateY(-2px); filter: drop-shadow(0 10px 20px var(--glow)); }
+        .btn-glow:active { transform: translateY(0) scale(0.98); transition-duration: 80ms; }
+
+        .input-glow { transition: box-shadow var(--dur-fast) var(--ease-in-out), border-color var(--dur-fast) var(--ease-in-out); }
         .input-glow:focus { box-shadow: 0 0 0 2px rgba(99,102,241,0.5), 0 0 25px rgba(99,102,241,0.35); border-color: rgba(129,140,248,0.9); }
         .range-slider-dark { -webkit-appearance: none; appearance: none; width: 100%; height: 8px; border-radius: 9999px; background: linear-gradient(to right, #6366f1 0%, #a855f7 50%, #ec4899 100%); outline: none; }
-        .range-slider-dark::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 28px; height: 28px; border-radius: 50%; background: radial-gradient(circle, #ffffff 0%, #e0e7ff 100%); cursor: pointer; box-shadow: 0 0 0 4px rgba(99,102,241,0.35), 0 10px 20px rgba(99,102,241,0.55); border: 2px solid #6366f1; transition: all 0.2s ease; }
+        .range-slider-dark::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 28px; height: 28px; border-radius: 50%; background: radial-gradient(circle, #ffffff 0%, #e0e7ff 100%); cursor: pointer; box-shadow: 0 0 0 4px rgba(99,102,241,0.35), 0 10px 20px rgba(99,102,241,0.55); border: 2px solid #6366f1; transition: transform .2s var(--ease-out-quad); }
         .range-slider-dark::-webkit-slider-thumb:hover { transform: scale(1.16); }
-        .clip-card-dark { transition: all 0.4s cubic-bezier(0.25,0.46,0.45,0.94); }
-        .clip-card-dark:hover { transform: translateY(-8px) scale(1.02); box-shadow: 0 35px 70px -12px rgba(99,102,241,0.45); border-color: rgba(129,140,248,0.6); }
-        .shimmer-bar { background: linear-gradient(90deg, transparent 0%, rgba(165,180,252,0.9) 50%, transparent 100%); background-size: 200% 100%; animation: shimmerMove 2s infinite; }
-        @keyframes shimmerMove { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        .clip-card-dark { transform: translateY(0) scale(1); transition: transform .3s var(--ease-out-quad), border-color .3s var(--ease-out-quad); }
+        .clip-card-dark:hover { transform: translateY(-6px) scale(1.02); border-color: var(--border-hi); }
+
+        /* Card strategia: stato selezionato visibile senza JS (:has) */
+        .crop-card:has(input:checked) { border-color: var(--border-hi); box-shadow: inset 0 0 0 1px var(--border-hi); }
+
+        /* Progress bar: scaleX (transform-only), niente layout per frame */
+        #progressBar { width: 100%; transform-origin: 0 50%; transform: scaleX(0); transition: transform .5s var(--ease-in-out); }
+
         .feature-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
         .badge-smart { background: rgba(16, 185, 129, 0.15); color: #4ade80; border: 1px solid rgba(16, 185, 129, 0.3); }
         .badge-karaoke { background: rgba(236, 72, 153, 0.15); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.3); }
         .badge-blur { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
         .badge-ai { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+
+        /* Rispetta la preferenza di riduzione del motion */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: .01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: .01ms !important;
+            }
+            html { scroll-behavior: auto !important; }
+        }
     </style>
 </head>
 <body class="min-h-screen text-white">
     <div class="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
-        <div class="absolute top-0 left-1/4 w-[28rem] h-[28rem] bg-indigo-600/20 rounded-full blur-[140px] animate-pulse"></div>
-        <div class="absolute bottom-0 right-1/4 w-[28rem] h-[28rem] bg-purple-600/18 rounded-full blur-[140px] animate-pulse" style="animation-delay: 1s;"></div>
+        <div class="absolute top-0 left-1/4 w-[28rem] h-[28rem] bg-indigo-600/20 rounded-full blur-[140px]"></div>
+        <div class="absolute bottom-0 right-1/4 w-[28rem] h-[28rem] bg-purple-600/18 rounded-full blur-[140px]"></div>
         <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[650px] h-[650px] bg-pink-600/12 rounded-full blur-[170px]"></div>
     </div>
 
@@ -55,7 +106,7 @@
                 </svg>
             </div>
             <h1 class="text-5xl md:text-7xl font-black mb-4 tracking-tight"><span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">REELFORGE</span></h1>
-            <p class="text-xl md:text-2xl text-slate-300 font-light">Viral Vertical Clips • Smart Crop • Karaoke • AI Hook Detection • Real-Time</p>
+            <p class="text-xl md:text-2xl text-slate-300 font-normal">Viral Vertical Clips • Smart Crop • Karaoke • AI Hook Detection • Real-Time</p>
             <div class="mt-5 flex flex-wrap items-center justify-center gap-2 text-sm text-slate-300">
                 <span class="px-3 py-1 glass rounded-full">9:16 Vertical</span>
                 <span class="px-3 py-1 glass rounded-full">Smart Face Crop</span>
@@ -69,7 +120,7 @@
                 <div class="p-8 md:p-12 space-y-8">
                     <!-- YouTube URL / Local Upload -->
                     <div class="space-y-3">
-                        <label class="flex items-center text-sm font-semibold text-slate-200"><svg class="w-5 h-5 mr-2 text-indigo-400" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg> YouTube URL <span class="text-slate-500">(oppure carica un file locale)</span></label>
+                        <label class="flex items-center text-sm font-semibold text-slate-200"><svg class="w-5 h-5 mr-2 text-indigo-400" fill="currentColor" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg> YouTube URL <span class="text-slate-400">(oppure carica un file locale)</span></label>
                         <input type="url" id="youtube_url" class="w-full px-6 py-4 glass text-white placeholder-slate-500 rounded-2xl input-glow focus:outline-none" placeholder="https://www.youtube.com/watch?v=...">
                         <label class="flex items-center gap-3 w-fit px-4 py-2 glass rounded-xl cursor-pointer hover:bg-white/5 transition">
                             <input type="file" id="local_video" accept="video/*" class="hidden">
@@ -83,12 +134,12 @@
                         <div class="space-y-4">
                             <div class="flex items-center justify-between"><label class="text-sm font-semibold text-slate-200">Durata per Clip</label><div class="flex items-baseline space-x-2"><span class="text-3xl font-black bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent" id="durationDisplay">30</span><span class="text-sm text-slate-400">sec</span></div></div>
                             <input type="range" id="clip_duration" min="30" max="60" value="30" step="5" class="range-slider-dark w-full">
-                            <div class="flex justify-between text-xs text-slate-500"><span>30</span><span>35</span><span>40</span><span>45</span><span>50</span><span>55</span><span>60</span></div>
+                            <div class="flex justify-between text-xs text-slate-400"><span>30</span><span>35</span><span>40</span><span>45</span><span>50</span><span>55</span><span>60</span></div>
                         </div>
                         <div class="space-y-4">
                             <div class="flex items-center justify-between"><label class="text-sm font-semibold text-slate-200">Numero di Clip</label><div class="flex items-baseline space-x-2"><span class="text-3xl font-black bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent" id="numClipsDisplay">3</span><span class="text-sm text-slate-400">clip</span></div></div>
                             <input type="range" id="num_clips" min="1" max="10" value="3" step="1" class="range-slider-dark w-full">
-                            <div class="flex justify-between text-xs text-slate-500"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>
+                            <div class="flex justify-between text-xs text-slate-400"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>
                         </div>
                     </div>
 
@@ -96,7 +147,7 @@
                     <div class="space-y-4">
                         <label class="text-sm font-semibold text-slate-200">Strategia di Ritaglio</label>
                         <div class="grid md:grid-cols-2 gap-4">
-                            <label class="flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition group">
+                            <label class="crop-card flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition group">
                                 <input type="radio" name="crop_strategy" value="smart_crop" checked class="accent-indigo-500">
                                 <div>
                                     <div class="flex items-center gap-2 mb-1"><span class="feature-badge badge-smart">Smart Crop</span></div>
@@ -104,7 +155,7 @@
                                     <p class="text-xs text-slate-400">Face tracking dinamico 9:16 full screen</p>
                                 </div>
                             </label>
-                            <label class="flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition group">
+                            <label class="crop-card flex items-center gap-4 glass rounded-2xl p-4 cursor-pointer hover:bg-white/5 transition group">
                                 <input type="radio" name="crop_strategy" value="blur_background" class="accent-blue-500">
                                 <div>
                                     <div class="flex items-center gap-2 mb-1"><span class="feature-badge badge-blur">Blur BG</span></div>
@@ -124,7 +175,7 @@
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
                                 <input type="checkbox" id="use_whisper" class="sr-only peer peer-checked:bg-gradient-to-r peer-checked:from-indigo-500 peer-checked:to-purple-500">
-                                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                <div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform after:duration-200 after:ease-[cubic-bezier(.34,1.56,.64,1)] peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-400/70"></div>
                             </label>
                         </div>
                         <div class="flex items-center justify-between glass rounded-2xl p-4 group">
@@ -134,7 +185,7 @@
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
                                 <input type="checkbox" id="use_karaoke" class="sr-only peer peer-checked:bg-gradient-to-r peer-checked:from-pink-500 peer-checked:to-rose-500">
-                                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                <div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform after:duration-200 after:ease-[cubic-bezier(.34,1.56,.64,1)] peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-400/70"></div>
                             </label>
                         </div>
                         <div class="flex items-center justify-between glass rounded-2xl p-4 group">
@@ -144,24 +195,24 @@
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
                                 <input type="checkbox" id="auto_select" checked class="sr-only peer peer-checked:bg-gradient-to-r peer-checked:from-amber-500 peer-checked:to-orange-500">
-                                <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                                <div class="w-11 h-6 bg-slate-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform after:duration-200 after:ease-[cubic-bezier(.34,1.56,.64,1)] peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-400/70"></div>
                             </label>
                         </div>
                         <div class="space-y-2">
                             <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Soglia punteggio minimo</label>
                             <input type="range" id="min_score" min="0" max="100" value="60" step="10" class="range-slider-dark w-full">
-                            <div class="flex justify-between text-[10px] text-slate-500 mt-1"><span>Basso</span><span>Alto</span></div>
+                            <div class="flex justify-between text-[10px] text-slate-400 mt-1"><span>Basso</span><span>Alto</span></div>
                         </div>
                     </div>
 
                     <!-- Text Overlays -->
                     <div class="grid md:grid-cols-2 gap-6">
                         <div class="space-y-3">
-                            <label class="text-sm font-semibold text-slate-200">Testo Banda Superiore <span class="text-slate-500">(opzionale)</span></label>
+                            <label class="text-sm font-semibold text-slate-200">Testo Banda Superiore <span class="text-slate-400">(opzionale)</span></label>
                             <input type="text" id="top_text" class="w-full px-6 py-4 glass text-white placeholder-slate-500 rounded-2xl input-glow focus:outline-none" placeholder="ES. TRENDING NOW" maxlength="80">
                         </div>
                         <div class="space-y-3">
-                            <label class="text-sm font-semibold text-slate-200">Testo Banda Inferiore <span class="text-slate-500">(opzionale)</span></label>
+                            <label class="text-sm font-semibold text-slate-200">Testo Banda Inferiore <span class="text-slate-400">(opzionale)</span></label>
                             <input type="text" id="bottom_text" class="w-full px-6 py-4 glass text-white placeholder-slate-500 rounded-2xl input-glow focus:outline-none" placeholder="ES. FOLLOW FOR MORE" maxlength="80">
                         </div>
                     </div>
@@ -170,11 +221,11 @@
                     <div class="glass rounded-2xl p-6 space-y-4">
                         <h3 class="text-sm font-semibold text-slate-200">Anteprima Parametri</h3>
                         <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
-                            <div><p class="text-slate-500 mb-1">Formato</p><p class="text-white font-medium">Verticale 9:16</p></div>
-                            <div><p class="text-slate-500 mb-1">Durata Clip</p><p class="text-white font-medium"><span id="previewDuration">30</span> sec</p></div>
-                            <div><p class="text-slate-500 mb-1">Clip</p><p class="text-white font-medium"><span id="previewClips">3</span></p></div>
-                            <div><p class="text-slate-500 mb-1">Ritaglio</p><p class="text-white font-medium" id="previewCrop">Smart Crop</p></div>
-                            <div><p class="text-slate-500 mb-1">Karaoke</p><p class="text-white font-medium" id="previewKaraoke">No</p></div>
+                            <div><p class="text-slate-400 mb-1">Formato</p><p class="text-white font-medium">Verticale 9:16</p></div>
+                            <div><p class="text-slate-400 mb-1">Durata Clip</p><p class="text-white font-medium"><span id="previewDuration">30</span> sec</p></div>
+                            <div><p class="text-slate-400 mb-1">Clip</p><p class="text-white font-medium"><span id="previewClips">3</span></p></div>
+                            <div><p class="text-slate-400 mb-1">Ritaglio</p><p class="text-white font-medium" id="previewCrop">Smart Crop</p></div>
+                            <div><p class="text-slate-400 mb-1">Karaoke</p><p class="text-white font-medium" id="previewKaraoke">No</p></div>
                         </div>
                     </div>
 
@@ -199,7 +250,7 @@
                         </div>
                     </div>
                     <div class="space-y-3">
-                        <div class="h-2 glass rounded-full overflow-hidden"><div id="progressBar" class="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-500" style="width: 0%"></div></div>
+                        <div class="h-2 glass rounded-full overflow-hidden"><div id="progressBar" class="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" style="transform: scaleX(0)"></div></div>
                     </div>
                 </div>
 
@@ -214,7 +265,7 @@
                                     <p class="text-slate-400"><span id="successCount" class="text-green-400 font-semibold">0</span> clip • <span id="cacheStatus"></span></p>
                                 </div>
                             </div>
-                            <button id="newGenerationBtn" class="px-6 py-3 glass text-slate-300 font-medium rounded-xl hover:bg-white/5 transition-all">Nuova Generazione</button>
+                            <button id="newGenerationBtn" class="px-6 py-3 glass text-slate-300 font-medium rounded-xl hover:bg-white/5 transition-colors">Nuova Generazione</button>
                         </div>
                         <div id="clipsGrid" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
                     </div>
@@ -226,12 +277,12 @@
                         <div class="flex-shrink-0 w-16 h-16 bg-red-500/20 rounded-2xl flex items-center justify-center"><svg class="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg></div>
                         <div class="flex-1"><p class="text-xl font-bold text-red-400 mb-2">Errore di Elaborazione</p><p id="errorMessage" class="text-slate-300"></p></div>
                     </div>
-                    <button id="tryAgainBtn" class="px-6 py-3 glass text-slate-300 font-medium rounded-xl hover:bg-white/5 transition-all">Riprova</button>
+                    <button id="tryAgainBtn" class="px-6 py-3 glass text-slate-300 font-medium rounded-xl hover:bg-white/5 transition-colors">Riprova</button>
                 </div>
             </div>
         </main>
 
-        <footer class="text-center mt-12 text-sm text-slate-500 fade-in"><p>ReelForge • Flask • FFmpeg • faster-whisper • librosa • OpenCV • MediaPipe • Socket.IO</p></footer>
+        <footer class="text-center mt-12 text-sm text-slate-400 fade-in"><p>ReelForge • Flask • FFmpeg • faster-whisper • librosa • OpenCV • MediaPipe • Socket.IO</p></footer>
     </div>
 
     <script>
@@ -262,20 +313,27 @@
         const progressPercent = document.getElementById('progressPercent');
         const progressStatus = document.getElementById('progressStatus');
 
+        // Mostra un pannello di stato con entrata animata (re-triggerabile)
+        function showState(el) {
+            el.classList.remove('hidden', 'state-enter');
+            void el.offsetWidth; // forza il restart dell'animazione
+            el.classList.add('state-enter');
+        }
+
         clipDurationSlider.addEventListener('input', (e) => { durationDisplay.textContent = e.target.value; previewDuration.textContent = e.target.value; });
         numClipsSlider.addEventListener('input', (e) => { numClipsDisplay.textContent = e.target.value; previewClips.textContent = e.target.value; });
         document.querySelectorAll('input[name="crop_strategy"]').forEach(r => r.addEventListener('change', (e) => { previewCrop.textContent = e.target.value === 'blur_background' ? 'Sfondo Sfocato' : 'Smart Crop'; }));
         useKaraoke.addEventListener('change', (e) => { previewKaraoke.textContent = e.target.checked ? 'Sì' : 'No'; });
 
         socket.on('job_progress', (data) => {
-            progressBar.style.width = data.progress + '%';
+            progressBar.style.transform = 'scaleX(' + (data.progress / 100) + ')';
             progressPercent.textContent = data.progress + '%';
             progressStatus.textContent = data.status || 'In elaborazione...';
         });
         socket.on('job_complete', (data) => {
             loadingState.classList.add('hidden');
             displayResults({clips: data.clips, successful: data.clips.filter(c=>c.success).length, cached: data.cached});
-            resultsState.classList.remove('hidden');
+            showState(resultsState);
             resultsState.scrollIntoView({behavior:'smooth', block:'nearest'});
             convertBtn.disabled = false;
             convertBtn.classList.remove('opacity-50','cursor-not-allowed');
@@ -314,8 +372,8 @@
             if (!youtubeUrl && !localVideoInput.files[0]) { showError('Inserisci un link YouTube oppure carica un file video locale'); return; }
             resultsState.classList.add('hidden');
             errorState.classList.add('hidden');
-            loadingState.classList.remove('hidden');
-            progressBar.style.width = '0%';
+            showState(loadingState);
+            progressBar.style.transform = 'scaleX(0)';
             progressPercent.textContent = '0%';
             progressStatus.textContent = 'Avvio elaborazione viral...';
             convertBtn.disabled = true;
@@ -368,7 +426,7 @@
                 if (clip.success) {
                     const score = (clip.score && clip.score.total) ? clip.score.total : '-';
                     const grade = (clip.score && clip.score.grade) ? clip.score.grade : '';
-                    card.innerHTML = `<div class="p-5"><div class="flex items-center justify-between mb-4"><div class="flex items-center space-x-3"><div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-xl flex items-center justify-center text-white font-bold">${clip.index}</div><div><p class="font-semibold">Clip ${clip.index}</p><p class="text-xs text-slate-400">${clip.duration}s • 1080 × 1920 ${grade ? `• Score: ${score}/${grade}` : ''}</p></div></div><div class="text-xs px-2 py-1 glass rounded-lg text-slate-300">${clip.cached?'Cache':'Nuovo'}</div></div><div class="mt-3 p-3 bg-slate-800/50 rounded-xl text-xs text-slate-300 font-light truncate max-w-full">${clip.text || ''}</div><a href="${clip.download_url}" class="flex items-center justify-center w-full px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-medium rounded-xl mt-2">Scarica</a></div>`;
+                    card.innerHTML = `<div class="p-5"><div class="flex items-center justify-between mb-4"><div class="flex items-center space-x-3"><div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-xl flex items-center justify-center text-white font-bold">${clip.index}</div><div><p class="font-semibold">Clip ${clip.index}</p><p class="text-xs text-slate-400">${clip.duration}s • 1080 × 1920 ${grade ? `• Score: ${score}/${grade}` : ''}</p></div></div><div class="text-xs px-2 py-1 glass rounded-lg text-slate-300">${clip.cached?'Cache':'Nuovo'}</div></div><div class="mt-3 p-3 bg-slate-800/50 rounded-xl text-xs text-slate-300 font-normal truncate max-w-full">${clip.text || ''}</div><a href="${clip.download_url}" class="flex items-center justify-center w-full px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-500 text-white font-medium rounded-xl mt-2">Scarica</a></div>`;
                 } else {
                     card.innerHTML = `<div class="p-5"><div class="flex items-center space-x-3 mb-4"><div class="w-10 h-10 bg-slate-700 rounded-xl flex items-center justify-center text-slate-400">${clip.index}</div><p class="font-semibold">Clip ${clip.index}</p></div><div class="px-4 py-3 bg-red-500/10 text-red-400 text-xs rounded-xl">${clip.error}</div></div>`;
                 }
@@ -379,7 +437,7 @@
         function showError(message) {
             loadingState.classList.add('hidden');
             resultsState.classList.add('hidden');
-            errorState.classList.remove('hidden');
+            showState(errorState);
             errorMessage.textContent = message;
             errorState.scrollIntoView({behavior:'smooth', block:'nearest'});
         }
