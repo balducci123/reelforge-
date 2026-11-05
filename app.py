@@ -1,7 +1,9 @@
 import os
 import re
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, redirect
 from utils.video_processor import VideoProcessor
+from utils.tiktok_publisher import TikTokPublisher
+from utils.tiktok_caption import generate_caption
 from pathlib import Path
 from threading import Thread
 from flask_socketio import SocketIO, emit
@@ -13,6 +15,7 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 processor = VideoProcessor()
+tiktok = TikTokPublisher()
 jobs = {}
 
 
@@ -56,7 +59,8 @@ def process_job(job_id, data):
                 results.append({
                     'index': i, 'success': True,
                     'download_url': f'/download/{video_folder.name}/{clip_path.name}',
-                    'filename': clip_path.name, 'duration': clip_duration, 'cached': True
+                    'filename': clip_path.name, 'duration': clip_duration, 'cached': True,
+                    'caption': generate_caption('')
                 })
             socketio.emit('job_complete', {'job_id': job_id, 'success': True, 'clips': results, 'cached': True}, namespace='/')
             return
@@ -74,7 +78,7 @@ def process_job(job_id, data):
             print(f'[ReelForge][{job_id}] Progress: {socket_pct}% - {status}')
             socketio.emit('job_progress', {'job_id': job_id, 'progress': socket_pct, 'status': status}, namespace='/')
 
-        results = processor.split_by_duration(
+        processed = processor.split_by_duration(
             downloaded_file,
             clip_duration=clip_duration, num_clips=num_clips,
             top_text=top_text, bottom_text=bottom_text,
@@ -86,6 +90,13 @@ def process_job(job_id, data):
             min_score=min_score,
             progress_callback=progress_cb
         )
+
+        # caption AI dalla trascrizione per la pubblicazione TikTok
+        results = []
+        for r in processed:
+            if r.get('success'):
+                r['caption'] = generate_caption(r.get('text', ''))
+            results.append(r)
 
         processor.cleanup(downloaded_file)
         successful = sum(1 for r in results if r['success'])
@@ -151,7 +162,8 @@ def on_start_processing(data):
                     results.append({
                         'index': i, 'success': True,
                         'download_url': f'/download/{video_folder.name}/{clip_path.name}',
-                        'filename': clip_path.name, 'duration': clip_duration, 'cached': True
+                        'filename': clip_path.name, 'duration': clip_duration, 'cached': True,
+                        'caption': generate_caption('')
                     })
                 emit('job_complete', {'success': True, 'clips': results, 'cached': True})
                 return
@@ -198,5 +210,129 @@ def handle_connect():
     emit('connected', {'status': 'ok'})
 
 
+# ------------------------------------------------------------------ #
+# Pubblicazione TikTok
+# ------------------------------------------------------------------ #
+def publish_job(job_id, items, privacy_level):
+    """Pubblica sequenzialmente le clip selezionate con eventi socket."""
+    total = len(items)
+    try:
+        for i, item in enumerate(items, 1):
+            # il path resta confinato in outputs/
+            folder, filename = item['folder'], os.path.basename(item['filename'])
+            file_path = (processor.output_dir / folder / filename) if folder \
+                else (processor.output_dir / filename)
+
+            def cb(pct, phase, cur=i):
+                socketio.emit('publish_progress', {
+                    'job_id': job_id,
+                    'current': cur, 'total': total,
+                    'filename': filename,
+                    'pct': pct, 'phase': phase
+                }, namespace='/')
+
+            print(f'[TikTok][{job_id}] ({i}/{total}) {filename} privacy={privacy_level}')
+            res = tiktok.publish_video(str(file_path), item.get('caption', ''),
+                                       privacy_level=privacy_level, progress_cb=cb)
+            out = {'filename': filename, 'success': res.get('ok', False)}
+            if res.get('ok'):
+                out['status'] = res.get('status', 'PUBLISHED')
+                out['publish_id'] = res.get('publish_id')
+                if res.get('privacy') == 'SELF_ONLY':
+                    out['note'] = "Pubblicato come privato: finché l'app TikTok non è " \
+                                  "auditata, rendi il video pubblico dall'app TikTok."
+            else:
+                out['error'] = res.get('error', 'Errore sconosciuto')
+            socketio.emit('publish_item_done', {'job_id': job_id, 'index': i,
+                                                'total': total, 'result': out}, namespace='/')
+        socketio.emit('publish_done', {'job_id': job_id}, namespace='/')
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f'[TikTok][{job_id}] ERRORE: {e}')
+        socketio.emit('publish_error', {'job_id': job_id, 'error': str(e)}, namespace='/')
+
+@socketio.on('start_publish')
+def on_start_publish(data):
+    data = data or {}
+    items = data.get('items') or []
+    if not tiktok.connected():
+        emit('publish_error', {'error': "Account TikTok non collegato: usa il pulsante 'Collega TikTok'."})
+        return
+    clean = []
+    for it in items:
+        folder, filename = it.get('folder') or '', it.get('filename')
+        caption = it.get('caption')
+        if not filename:
+            continue
+        clean.append({'folder': folder, 'filename': filename,
+                      'caption': (caption or '')[:90]})
+    if not clean:
+        emit('publish_error', {'error': 'Nessuna clip selezionata'})
+        return
+    privacy = data.get('privacy_level') or 'SELF_ONLY'
+    job_id = str(uuid.uuid4())
+    thread = Thread(target=publish_job, args=(job_id, clean, privacy))
+    thread.daemon = True
+    thread.start()
+    print(f'[TikTok] Job {job_id}: {len(clean)} clip in coda (privacy={privacy})')
+
+@app.route('/api/tiktok/config', methods=['POST'])
+def tiktok_config():
+    data = request.get_json(silent=True) or {}
+    ck = (data.get('client_key') or '').strip()
+    cs = (data.get('client_secret') or '').strip()
+    ru = (data.get('redirect_uri') or '').strip() or None
+    if not ck or not cs:
+        return jsonify({'success': False, 'error': 'client_key e client_secret sono richiesti'}), 400
+    cfg = tiktok.save_config(ck, cs, ru)
+    return jsonify({'success': True,
+                    'redirect_uri': cfg.get('redirect_uri'),
+                    'note': "Aggiungi esattamente questo redirect URI nell'app TikTok"
+                            " (Web Redirect URL) e poi premi 'Collega TikTok'."})
+
+@app.route('/api/tiktok/status')
+def tiktok_status():
+    st = {'configured': tiktok.configured(), 'connected': tiktok.connected()}
+    if tiktok.connected():
+        try:
+            st.update(tiktok.get_user_info())
+        except Exception as e:
+            st['connected'] = False
+            st['error'] = f'Token scaduto/non valido: {e}'
+    return jsonify(st)
+
+@app.route('/api/tiktok/disconnect', methods=['POST'])
+def tiktok_disconnect():
+    tiktok.disconnect()
+    return jsonify({'success': True})
+
+@app.route('/tiktok/login')
+def tiktok_login():
+    try:
+        url = tiktok.get_authorize_url()
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+    return redirect(url)
+
+@app.route('/tiktok/callback')
+def tiktok_callback():
+    code = request.args.get('code')
+    state = request.args.get('state')
+    if not code:
+        return f"<p>OAuth TikTok annullato o rifiutato ({request.args.get('error_domain') or request.args.get('error')}). Ritorna a ReelForge e riprova.</p>"
+    ok, err = tiktok.exchange_code(code, state)
+    if ok:
+        return ("<script>window.onload=()=>{setTimeout(()=>window.close(),1200)};</script>"
+                "<p style='font-family:sans-serif;color:#1db954'>✅ TikTok collegato. Puoi chiudere questa finestra.</p>")
+    return f"<p style='font-family:sans-serif;color:#e53e3e'>❌ Collegamento fallito: {err}</p>"
+
+@app.route('/api/tiktok/caption')
+def tiktok_caption_api():
+    text = request.args.get('text', '')
+    return jsonify({'caption': generate_caption(text)})
+
+# ------------------------------------------------------------------ #
 if __name__ == '__main__':
     socketio.run(app, debug=True, host='0.0.0.0', port=5000)

@@ -79,6 +79,24 @@
         .badge-blur { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
         .badge-ai { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
 
+        /* ── Pubblicazione TikTok ── */
+        .tt-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+        .tt-on { background: #4ade80; box-shadow: 0 0 10px rgba(74,222,128,.8); }
+        .tt-off { background: #64748b; }
+        .pub-row { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px; align-items: center; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08); }
+        .pub-row input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--indigo-500); }
+        .pub-name { font-size: 12px; color: var(--slate-300, #cbd5e1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .pub-cap { width: 100%; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); color: #e7e4f4; border-radius: 9px; padding: 6px 10px; font-size: 12px; font-family: inherit; }
+        .pub-cap:focus { outline: none; border-color: var(--border-hi); }
+        .pub-status { font-size: 11px; }
+        .pub-ok { color: #4ade80; }
+        .pub-err { color: #f87171; }
+        .ak-btn { padding: 6px 13px; border-radius: 9px; font-size: 12px; font-weight: 600; cursor: pointer; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); color: #e2e8f0; transition: background var(--dur-fast) var(--ease-in-out); }
+        .ak-btn:hover { background: rgba(255,255,255,.1); }
+        .ak-btn.primary { background: linear-gradient(90deg, var(--accent), var(--accent-2)); border: none; }
+        .ak-input { width: 100%; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1); color: #e7e4f4; border-radius: 9px; padding: 7px 10px; font-size: 12px; font-family: inherit; }
+        .ak-input:focus { outline: none; border-color: var(--border-hi); }
+
         /* Rispetta la preferenza di riduzione del motion */
         @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after {
@@ -271,6 +289,49 @@
                     </div>
                 </div>
 
+                <!-- Pubblicazione TikTok -->
+                <div id="publishState" class="hidden border-t border-white/5">
+                    <div class="p-8 md:p-12">
+                        <div class="flex flex-col md:flex-row items-start md:items-center justify-between mb-6 space-y-4 md:space-y-0">
+                            <div class="flex items-center space-x-4">
+                                <div class="w-12 h-12 bg-gradient-to-br from-slate-700 to-slate-800 rounded-2xl flex items-center justify-center text-2xl">🎵</div>
+                                <div>
+                                    <h3 class="text-xl font-bold">Pubblica su TikTok</h3>
+                                    <p class="text-slate-400 text-sm flex items-center gap-2"><span class="tt-dot tt-off" id="ttDot"></span><span id="ttLabel">Account non collegato</span></p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <button id="ttConfigToggle" class="ak-btn">Configura API…</button>
+                                <button id="ttConnectBtn" class="ak-btn primary">Collega TikTok</button>
+                                <button id="ttDisconnectBtn" class="ak-btn hidden">Scollega</button>
+                            </div>
+                        </div>
+
+                        <!-- Config API (client key/secret del portale sviluppatori) -->
+                        <div id="ttConfigPanel" class="hidden glass rounded-2xl p-4 mb-5 space-y-3">
+                            <div class="grid md:grid-cols-2 gap-3">
+                                <div><label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Client Key</label><input class="ak-input mt-1" id="ttClientKey" autocomplete="off" placeholder="sb_xxxxx..."></div>
+                                <div><label class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Client Secret</label><input class="ak-input mt-1" id="ttClientSecret" type="password" autocomplete="off" placeholder="codice segreto dell'app"></div>
+                            </div>
+                            <button id="ttConfigSave" class="ak-btn">Salva configurazione</button>
+                            <p class="text-xs text-slate-400 leading-relaxed">1) Crea una app (tipo "Web") su <b>developers.tiktok.com</b> → prodotti: <b>Content Posting API</b>. 2) In "Redirect URL" aggiungi esattamente l'URI che verrà suggerito qui sopra. 3) Salva, poi usa <b>Collega TikTok</b>. Chiavi e token restano solo sul tuo PC (cartella <code>data/</code>, non in git).</p>
+                        </div>
+
+                        <div id="pubItems" class="space-y-2 mb-5"></div>
+
+                        <div class="flex flex-col md:flex-row md:items-center gap-3 justify-between">
+                            <label class="text-xs text-slate-400 flex items-center gap-2"><input type="radio" name="tt_privacy" value="SELF_ONLY" checked class="accent-indigo-500"> Privato (solo tu — obbligatorio finché l'app non è auditata)</label>
+                            <button id="publishBtn" class="ak-btn primary px-6 py-3 text-base" disabled>▶ Pubblica su TikTok</button>
+                        </div>
+
+                        <div id="pubProgress" class="hidden mt-5 glass rounded-2xl p-4">
+                            <div class="flex items-center justify-between mb-2 text-sm"><span id="pubStatus" class="text-slate-300">…</span><span id="pubPct" class="font-bold text-indigo-300"></span></div>
+                            <div class="h-1.5 glass rounded-full overflow-hidden"><div id="pubBar" style="width:100%;transform:scaleX(0);transform-origin:0 50%;transition:transform .4s var(--ease-in-out);height:100%;background:var(--brand-gradient);border-radius:9999px"></div></div>
+                            <div id="pubLog" class="mt-3 space-y-1 text-xs"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Error -->
                 <div id="errorState" class="hidden p-8 md:p-12 border-t border-white/5">
                     <div class="flex items-start space-x-5 mb-6">
@@ -334,6 +395,8 @@
             loadingState.classList.add('hidden');
             displayResults({clips: data.clips, successful: data.clips.filter(c=>c.success).length, cached: data.cached});
             showState(resultsState);
+            showState(publishState);
+            renderPublishItems(data.clips.filter(c => c.success));
             resultsState.scrollIntoView({behavior:'smooth', block:'nearest'});
             convertBtn.disabled = false;
             convertBtn.classList.remove('opacity-50','cursor-not-allowed');
@@ -441,6 +504,154 @@
             errorMessage.textContent = message;
             errorState.scrollIntoView({behavior:'smooth', block:'nearest'});
         }
+
+        // ──────────────────────────── TikTok publish ────────────────────────────
+        const publishState = document.getElementById('publishState');
+        const pubItemsEl = document.getElementById('pubItems');
+        const publishBtn = document.getElementById('publishBtn');
+        const pubProgress = document.getElementById('pubProgress');
+        const pubStatusEl = document.getElementById('pubStatus');
+        const pubPct = document.getElementById('pubPct');
+        const pubBar = document.getElementById('pubBar');
+        const pubLog = document.getElementById('pubLog');
+        const ttDot = document.getElementById('ttDot');
+        const ttLabel = document.getElementById('ttLabel');
+        const ttConnectBtn = document.getElementById('ttConnectBtn');
+        const ttDisconnectBtn = document.getElementById('ttDisconnectBtn');
+        const ttConfigToggle = document.getElementById('ttConfigToggle');
+        const ttConfigPanel = document.getElementById('ttConfigPanel');
+        let pubItemsData = [];
+        let ttConnected = false;
+        let ttWindow = null;
+
+        function ttRefreshStatus() {
+            fetch('/api/tiktok/status').then(r => r.json()).then(st => {
+                ttConnected = !!st.connected;
+                if (ttConnected) {
+                    ttDot.className = 'tt-dot tt-on';
+                    ttLabel.textContent = 'Collegato: ' + (st.display_name || 'TikTok');
+                    ttConnectBtn.classList.add('hidden');
+                    ttDisconnectBtn.classList.remove('hidden');
+                } else {
+                    ttDot.className = 'tt-dot tt-off';
+                    ttLabel.textContent = st.error ? ('Errore token: ricollega') : 'Account non collegato';
+                    ttConnectBtn.classList.remove('hidden');
+                    ttDisconnectBtn.classList.add('hidden');
+                }
+                updatePubBtn();
+                console.log('[ReelForge] TikTok status:', st);
+            }).catch(e => console.warn('[ReelForge] TikTok status KO', e));
+        }
+
+        function updatePubBtn() {
+            const sel = pubItemsData.filter(i => i.checked).length;
+            publishBtn.disabled = !(ttConnected && sel > 0);
+            publishBtn.textContent = sel > 0 ? `▶ Pubblica ${sel} clip su TikTok` : '▶ Pubblica su TikTok';
+        }
+
+        function renderPublishItems(clips) {
+            pubItemsData = clips.map(c => ({ filename: c.filename, folder: (c.download_url.split('/')[2] || ''),
+                                             caption: c.caption || '✂ Nuovo reel • ReelForge #perte #neiperte', checked: false, srcText: c.text || '' }));
+            pubItemsEl.innerHTML = '';
+            pubItemsData.forEach((it, i) => {
+                const row = document.createElement('div');
+                row.className = 'pub-row';
+                row.innerHTML = `<input type="checkbox" id="pub_${i}" checked>
+                    <span class="pub-name" title="${it.filename}">Clip ${i+1} — ${it.filename}</span>
+                    <span style="display:flex;gap:6px;align-items:center">
+                        <input type="text" class="pub-cap" id="cap_${i}" value="" maxlength="90" placeholder="caption…">
+                        <button class="ak-btn" style="padding:5px 9px" title="Rigenera caption AI dalla trascrizione" id="reai_${i}">↻AI</button>
+                    </span>`;
+                pubItemsEl.appendChild(row);
+                document.getElementById('cap_' + i).value = it.caption;
+                document.getElementById('pub_' + i).addEventListener('change', e => { it.checked = e.target.checked; updatePubBtn(); });
+                document.getElementById('cap_' + i).addEventListener('input', e => { it.caption = e.target.value; });
+                document.getElementById('reai_' + i).addEventListener('click', () => {
+                    fetch('/api/tiktok/caption?text=' + encodeURIComponent(it.srcText))
+                        .then(r => r.json()).then(d => { it.caption = d.caption; document.getElementById('cap_' + i).value = d.caption; });
+                });
+            });
+            updatePubBtn();
+        }
+
+        publishBtn.addEventListener('click', () => {
+            if (!ttConnected) { console.warn('[ReelForge] TikTok non collegato'); return; }
+            const items = pubItemsData.filter(i => i.checked)
+                .map(i => ({ filename: i.filename, folder: i.folder, caption: i.caption }));
+            if (!items.length) return;
+            const privacy = document.querySelector('input[name="tt_privacy"]:checked').value;
+            resultsState.classList.add('hidden');
+            pubItemsData.forEach(i => i.checked = false);
+            pubLog.innerHTML = '';
+            pubBar.style.transform = 'scaleX(0)';
+            pubPct.textContent = '';
+            pubStatusEl.textContent = "Avvio pubblicazione…";
+            showState(pubProgress);
+            publishBtn.disabled = true;
+            console.log('[ReelForge] Emit start_publish:', items.length, 'clip');
+            socket.emit('start_publish', { items: items, privacy_level: privacy });
+        });
+
+        socket.on('publish_progress', (d) => {
+            const overall = ((d.current - 1) + d.pct / 100) / d.total * 100;
+            pubBar.style.transform = 'scaleX(' + overall / 100 + ')';
+            pubPct.textContent = Math.round(overall) + '%';
+            pubStatusEl.textContent = `Clip ${d.current}/${d.total} — ${d.phase}`;
+        });
+
+        socket.on('publish_item_done', (d) => {
+            const r = d.result;
+            const line = document.createElement('p');
+            if (r.success) {
+                line.className = 'pub-status pub-ok';
+                line.textContent = '✅ ' + r.filename + ' → TikTok (' + r.status + ')' +
+                    (r.note ? ' — ' + r.note : '');
+            } else {
+                line.className = 'pub-status pub-err';
+                line.textContent = '❌ ' + r.filename + ' → ' + (r.error || 'fallita');
+            }
+            pubLog.appendChild(line);
+        });
+
+        socket.on('publish_done', () => {
+            pubStatusEl.textContent = 'Pubblicazione completata';
+            pubBar.style.transform = 'scaleX(1)';
+            publishBtn.disabled = pubItemsData.filter(i => i.checked).length === 0;
+            resultsState.classList.remove('hidden');
+        });
+
+        socket.on('publish_error', (d) => {
+            pubStatusEl.textContent = 'Errore di pubblicazione';
+            const line = document.createElement('p');
+            line.className = 'pub-status pub-err';
+            line.textContent = '❌ ' + (d.error || 'Errore');
+            pubLog.appendChild(line);
+            publishBtn.disabled = false;
+        });
+
+        ttConnectBtn.addEventListener('click', () => {
+            ttWindow = window.open('/tiktok/login', 'tiktok_oauth', 'width=560,height=760');
+            if (!ttWindow) { alert('Permetti i popup per collegare TikTok'); return; }
+            const t = setInterval(() => {
+                if (ttWindow.closed) { clearInterval(t); ttRefreshStatus(); }
+            }, 800);
+        });
+        ttDisconnectBtn.addEventListener('click', () => {
+            fetch('/api/tiktok/disconnect', { method: 'POST' }).then(ttRefreshStatus);
+        });
+        ttConfigToggle.addEventListener('click', () => ttConfigPanel.classList.toggle('hidden'));
+        document.getElementById('ttConfigSave').addEventListener('click', () => {
+            const body = { client_key: document.getElementById('ttClientKey').value,
+                           client_secret: document.getElementById('ttClientSecret').value };
+            if (!body.client_key || !body.client_secret) return;
+            fetch('/api/tiktok/config', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body) }).then(r => r.json()).then(d => {
+                    console.log('[ReelForge] TikTok config salvata:', d);
+                    ttConfigToggle.textContent = 'Configura API ✓';
+                    ttRefreshStatus();
+                });
+        });
+        ttRefreshStatus();
 
         newGenerationBtn.addEventListener('click', () => { resultsState.classList.add('hidden'); document.getElementById('youtube_url').focus(); window.scrollTo({top:0, behavior:'smooth'}); });
         tryAgainBtn.addEventListener('click', () => { errorState.classList.add('hidden'); });
