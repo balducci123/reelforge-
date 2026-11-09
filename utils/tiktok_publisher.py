@@ -33,6 +33,7 @@ CONFIG_FILE = DATA_DIR / 'tiktok_config.json'
 TOKENS_FILE = DATA_DIR / 'tiktok_tokens.json'
 
 CHUNK_SIZE = 32 * 1024 * 1024          # 32 MB per blocco (max API: 64 MB)
+MAX_SINGLE = 64 * 1024 * 1024          # <= 64MB si uploada in un unico chunk
 TITLE_MAX_LEN = 90                      # prudenziale sull'attributo title
 STATUS_POLL_TRIES = 6
 STATUS_POLL_INTERVAL = 3.0
@@ -223,14 +224,18 @@ class TikTokPublisher:
         if size <= 0:
             return {'ok': False, 'error': 'File video vuoto'}
 
-        # Piano chunk: TikTok valida che i byte realmente inviati coincidano
-        # con chunk_size dichiarato (tolto l'ultimo pezzo). Se il file entra
-        # in un chunk singolo (<= 64MB) dichiarare la dimensione esatta del file.
-        if size <= CHUNK_SIZE:
+        # Piano chunk (regole TikTok Media Transfer Guide):
+        #  - total_chunk_count = floor(video_size / chunk_size);
+        #  - chunk >= 5MB e <= 64MB; l'ultimo puo' superare chunk_size
+        #    (fino a 128MB) incorporando i byte di coda;
+        #  - file <= 64MB: un solo chunk della dimensione esatta del file.
+        if size <= MAX_SINGLE:
             chunk_size, total_chunks = size, 1
-        else:  #.Multi-chunk: chunk uguali (ultimo resto), dimensione dichiarata = quella effettiva
-            total_chunks = max(1, -(-size // CHUNK_SIZE))
-            chunk_size = -(-size // total_chunks)  # ceil: pezz uguali, ultimo resto
+        else:
+            chunk_size = CHUNK_SIZE            # 32MB, nei limiti 5-64MB
+            total_chunks = size // chunk_size  # floor, come richiesto
+            if total_chunks < 1:
+                total_chunks = 1
 
         # 1) init
         cb(2, 'inizializzazione')
@@ -265,11 +270,15 @@ class TikTokPublisher:
         if not publish_id or not upload_url:
             return {'ok': False, 'error': 'Risposta init senza publish_id'}
 
-        # 2) upload a blocchi
+        # 2) upload a blocchi (ultimo chunk = chunk_size + byte di coda)
+        trailing = size - chunk_size * total_chunks  # 0 se divisibile
         sent = 0
         with open(path, 'rb') as f:
             for i in range(total_chunks):
-                chunk = f.read(chunk_size)
+                if i < total_chunks - 1:
+                    chunk = f.read(chunk_size)
+                else:
+                    chunk = f.read(chunk_size + trailing)
                 end = sent + len(chunk) - 1
                 headers = {
                     **auth,
