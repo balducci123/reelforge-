@@ -45,7 +45,5 @@ outputs/
 test.mp4
 
 # TikTok: chiavi e token SOLO locali (mai in git)
-data/tiktok_tokens.json
-data/tiktok_config.json
-data/tiktok_oauth_pending.json
+data/
 
