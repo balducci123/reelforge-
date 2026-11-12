@@ -31,6 +31,8 @@ SCOPE = 'user.info.basic,video.publish'
 DATA_DIR = Path('data')
 CONFIG_FILE = DATA_DIR / 'tiktok_config.json'
 TOKENS_FILE = DATA_DIR / 'tiktok_tokens.json'
+SSL_DIR = DATA_DIR / 'ssl'
+CA_BUNDLE_FILE = SSL_DIR / 'tiktok_upload_ca.pem'
 
 CHUNK_SIZE = 32 * 1024 * 1024          # 32 MB per blocco (max API: 64 MB)
 MAX_SINGLE = 64 * 1024 * 1024          # <= 64MB si uploada in un unico chunk
@@ -198,6 +200,70 @@ class TikTokPublisher:
     # ------------------------------------------------------------------ #
     # Publish (Direct Post FILE_UPLOAD)
     # ------------------------------------------------------------------ #
+    def _resolve_upload_url(self, upload_url):
+        """TikTok a volte restituisce nel campo upload_url un nodo di upload
+        (es. open-upload-i08n.tiktokapis.com) che non esiste più nelle DNS
+        pubbliche (NXDOMAIN) -> l'upload fallisce. Verifico la risolvibilità
+        dell'host; se non risolve, ricado sull'host canonico documentato
+        (open-upload.tiktokapis.com) mantenendo path e query invariati."""
+        from urllib.parse import urlsplit, urlunsplit
+        import socket
+        parts = urlsplit(upload_url)
+        host = parts.hostname
+        if not host:
+            return upload_url
+        try:
+            socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+            return upload_url
+        except OSError as e:
+            fallback = 'open-upload.tiktokapis.com'
+            fixed = urlunsplit((parts.scheme, parts.netloc.replace(host, fallback, 1),
+                                parts.path, parts.query, parts.fragment))
+            print(f"[TikTok] Host di upload '{host}' non risolvibile ({e.errno}): "
+                  f"uso '{fallback}' (host canonico)")
+            return fixed
+
+    def _tls_ca_bundle(self, host):
+        """Alcune reti aziendali (es. firewall FortiGate con SSL inspection)
+        intercettano le connessioni verso tiktokapis.com ri-firmando i
+        certificati con una CA propria: la verifica standard di Python fallisce
+        con 'self-signed certificate in certificate chain'. Estraggo la catena
+        presentata dal firewall e la salvo come CA-bundle locale, usato SOLO
+        per l'host di upload (i dati attraversano comunque il firewall, non
+        una pagina di blocco: TikTok risponde normalmente dietro l'intercetta)."""
+        import ssl
+        import socket
+        import base64
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with socket.create_connection((host, 443), timeout=15) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as tls:
+                chain = tls._sslobj.get_unverified_chain()
+        if not chain:
+            return None
+        pem_parts = [c.public_bytes(1).strip() for c in chain]  # 1 = PEM
+        SSL_DIR.mkdir(parents=True, exist_ok=True)
+        CA_BUNDLE_FILE.write_text('\n'.join(pem_parts) + '\n', encoding='ascii')
+        return str(CA_BUNDLE_FILE)
+
+    def _put_chunk(self, url, headers, chunk, timeout):
+        """PUT di un chunk con fallback TLS: se la verifica del certificato
+        fallisce per una CA di rete non fidata (SSL inspection), riprovo con il
+        CA-bundle locale estratto dal firewall."""
+        try:
+            return requests.put(url, headers=headers, data=chunk, timeout=timeout)
+        except requests.exceptions.SSLError as e:
+            from urllib.parse import urlsplit
+            host = urlsplit(url).hostname or 'open-upload.tiktokapis.com'
+            bundle = self._tls_ca_bundle(host)
+            if not bundle:
+                raise
+            print(f"[TikTok] SSL inspection di rete rilevata ({e.__cause__ or e}); "
+                  f"riprovo con CA-bundle locale '{bundle}'")
+            return requests.put(url, headers=headers, data=chunk, timeout=timeout,
+                                verify=bundle)
+
     def publish_video(self, file_path, caption, privacy_level='SELF_ONLY',
                       progress_cb=None):
         """
@@ -270,6 +336,8 @@ class TikTokPublisher:
         if not publish_id or not upload_url:
             return {'ok': False, 'error': 'Risposta init senza publish_id'}
 
+        upload_url = self._resolve_upload_url(upload_url)
+
         # 2) upload a blocchi (ultimo chunk = chunk_size + byte di coda)
         trailing = size - chunk_size * total_chunks  # 0 se divisibile
         sent = 0
@@ -286,7 +354,7 @@ class TikTokPublisher:
                     'Content-Length': str(len(chunk)),
                     'Content-Range': f'bytes {sent}-{end}/{size}',
                 }
-                r = requests.put(upload_url, headers=headers, data=chunk, timeout=600)
+                r = self._put_chunk(upload_url, headers, chunk, timeout=600)
                 if r.status_code not in (200, 201, 206):
                     return {'ok': False,
                             'error': f'Upload chunk {i + 1}/{total_chunks} HTTP {r.status_code}: {r.text[:200]}'}
